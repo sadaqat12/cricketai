@@ -108,7 +108,7 @@ class CricketGame {
             nearestFielder: null,
             chasingFielder: null,
             ballLastPosition: new THREE.Vector3(),
-            fielderStates: new Map(), // Track fielder states: 'idle', 'chasing', 'throwing', 'returning'
+            fielderStates: new Map(), // Track fielder states: 'idle', 'chasing', 'throwing', 'returning', 'catching'
             fielderOriginalPositions: new Map(), // Store original fielding positions
             // Fielding zones for better assignment
             fieldingZones: {
@@ -116,6 +116,15 @@ class CricketGame {
                 'offSide': ['Cover', 'Point', 'Gully', 'Third Man'],
                 'legSide': ['Square Leg', 'Fine Leg', 'Mid On'],
                 'behind': ['First Slip', 'Third Man', 'Fine Leg']
+            },
+            // Catching system
+            catchingSystem: {
+                catchRadius: 3.0, // 3-meter radius for catch detection
+                divingCatchRadius: 2.0, // If ball is between 2-3 meters, use diving catch
+                regularCatchRadius: 1.5, // If ball is within 1.5 meters, use regular catch
+                catchInProgress: false,
+                catchingFielder: null,
+                catchResult: null // 'success', 'dropped', null
             }
         };
         
@@ -1175,6 +1184,9 @@ class CricketGame {
     updateBallPhysics(deltaTime) {
         if (!this.cricketBall || !this.ballPhysics.isMoving) return;
         
+        // Check for catching opportunities during ball flight
+        this.checkForCatch();
+        
         // Apply gravity
         this.ballPhysics.velocity.y += this.ballPhysics.gravity * deltaTime;
         
@@ -1932,6 +1944,173 @@ class CricketGame {
         setTimeout(() => {
             this.resetFieldingSystem();
         }, Math.max(2500, estimatedTime * 1000 + 1000)); // Dynamic timeout based on throw time
+    }
+
+    checkForCatch() {
+        // Don't check for catches if already in progress or ball is being fielded
+        if (this.fieldingSystem.catchingSystem.catchInProgress || 
+            this.fieldingSystem.chasingFielder ||
+            !this.fieldingSystem.ballIsHit) {
+            return;
+        }
+
+        const ballPos = this.cricketBall.position;
+        const catchRadius = this.fieldingSystem.catchingSystem.catchRadius;
+
+        // Check each fielder for catch opportunities
+        this.fielders.forEach(fielder => {
+            if (this.fieldingSystem.fielderStates.get(fielder.userData.description) !== 'idle') {
+                return; // Skip fielders that are busy
+            }
+
+            const fielderPos = fielder.position;
+            const distance = ballPos.distanceTo(fielderPos);
+
+            // Check if ball is within catching radius and at catchable height
+            if (distance <= catchRadius && ballPos.y >= 0.5 && ballPos.y <= 3.0) {
+                console.log(`🥎 Catch opportunity detected! ${fielder.userData.description} is ${distance.toFixed(1)}m from ball`);
+                this.attemptCatch(fielder, distance);
+                return;
+            }
+        });
+    }
+
+    attemptCatch(fielder, distance) {
+        // Mark catch in progress
+        this.fieldingSystem.catchingSystem.catchInProgress = true;
+        this.fieldingSystem.catchingSystem.catchingFielder = fielder;
+        this.fieldingSystem.fielderStates.set(fielder.userData.description, 'catching');
+
+        console.log(`🏃‍♂️ ${fielder.userData.description} attempting catch at ${distance.toFixed(1)}m distance!`);
+
+        // Determine catch type based on distance
+        const regularRadius = this.fieldingSystem.catchingSystem.regularCatchRadius;
+        const divingRadius = this.fieldingSystem.catchingSystem.divingCatchRadius;
+        
+        let catchType = 'regularcatch';
+        let catchAnimation = 'regularcatch.fbx';
+        
+        if (distance > divingRadius) {
+            catchType = 'divingcatch';
+            catchAnimation = 'divingcatch.fbx';
+            console.log(`🤸‍♂️ ${fielder.userData.description} going for a diving catch!`);
+        } else {
+            console.log(`✋ ${fielder.userData.description} going for a regular catch!`);
+        }
+
+        // Load and play catch animation
+        this.loadCharacterAnimation(fielder, catchAnimation, fielder.userData.description);
+        
+        setTimeout(() => {
+            this.playCricketPlayerAnimation(fielder, catchType);
+            
+            // Determine catch success based on distance and ball speed
+            setTimeout(() => {
+                this.resolveCatch(fielder, distance, catchType);
+            }, 800); // Give time for animation to play
+            
+        }, 100);
+    }
+
+    resolveCatch(fielder, distance, catchType) {
+        const ballSpeed = this.ballPhysics.velocity.length();
+        
+        // Calculate catch success probability
+        let catchProbability = 1.0; // Start with 100% success
+        
+        // Reduce probability based on distance
+        const maxDistance = this.fieldingSystem.catchingSystem.catchRadius;
+        const distanceFactor = 1 - (distance / maxDistance);
+        catchProbability *= distanceFactor;
+        
+        // Reduce probability based on ball speed
+        const speedFactor = Math.max(0.3, 1 - (ballSpeed / 30)); // Harder to catch fast balls
+        catchProbability *= speedFactor;
+        
+        // Diving catches are harder
+        if (catchType === 'divingcatch') {
+            catchProbability *= 0.7; // 30% harder for diving catches
+        }
+        
+        // Determine success
+        const isSuccessful = Math.random() < catchProbability;
+        
+        console.log(`📊 Catch probability: ${(catchProbability * 100).toFixed(1)}% (Distance: ${distance.toFixed(1)}m, Speed: ${ballSpeed.toFixed(1)}, Type: ${catchType})`);
+        
+        if (isSuccessful) {
+            this.successfulCatch(fielder, catchType);
+        } else {
+            this.droppedCatch(fielder, catchType);
+        }
+    }
+
+    successfulCatch(fielder, catchType) {
+        console.log(`🎉 WICKET! ${fielder.userData.description} takes a spectacular ${catchType}!`);
+        
+        // Stop ball movement
+        this.ballPhysics.isMoving = false;
+        this.ballPhysics.velocity.set(0, 0, 0);
+        
+        // Position ball in fielder's hands
+        this.cricketBall.position.copy(fielder.position);
+        this.cricketBall.position.y += 1.5;
+        
+        // Set catch result
+        this.fieldingSystem.catchingSystem.catchResult = 'success';
+        
+        // Clear ball trail for clean visual
+        this.clearBallTrail();
+        
+        // Celebrate animation could be added here
+        setTimeout(() => {
+            console.log(`✨ ${fielder.userData.description} celebrates the catch!`);
+            this.resetCatchingSystem();
+        }, 2000);
+    }
+
+    droppedCatch(fielder, catchType) {
+        console.log(`😞 Oh no! ${fielder.userData.description} drops the ${catchType}! The ball continues...`);
+        
+        // Set catch result
+        this.fieldingSystem.catchingSystem.catchResult = 'dropped';
+        
+        // Ball continues with reduced velocity (deflected by attempted catch)
+        this.ballPhysics.velocity.multiplyScalar(0.6); // Reduce speed by 40%
+        
+        // Add slight deflection
+        const deflection = new THREE.Vector3(
+            (Math.random() - 0.5) * 2,
+            Math.random() * 2,
+            (Math.random() - 0.5) * 2
+        );
+        this.ballPhysics.velocity.add(deflection);
+        
+        // Continue fielding normally
+        setTimeout(() => {
+            this.resetCatchingSystem();
+            // Ball continues, fielding system will pick it up normally
+        }, 1000);
+    }
+
+    resetCatchingSystem() {
+        const catching = this.fieldingSystem.catchingSystem;
+        
+        // Reset catching fielder state to idle
+        if (catching.catchingFielder) {
+            this.fieldingSystem.fielderStates.set(catching.catchingFielder.userData.description, 'idle');
+            
+            // Return to original position if catch was successful
+            if (catching.catchResult === 'success') {
+                this.startFielderReturning(catching.catchingFielder);
+            }
+        }
+        
+        // Reset catching system
+        catching.catchInProgress = false;
+        catching.catchingFielder = null;
+        catching.catchResult = null;
+        
+        console.log('🔄 Catching system reset');
     }
 
     resetFieldingSystem() {
@@ -2847,7 +3026,48 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         };
-        window.resetFielding = () => game.resetFieldingSystem();
+        window.resetFielding = () => {
+            game.resetFieldingSystem();
+            game.resetCatchingSystem();
+            console.log('🔄 Fielding and catching systems reset');
+        };
+
+        // Expose catching system for testing
+        window.testCatch = (fielderIndex = 0) => {
+            if (game.fielders.length === 0) {
+                console.log('❌ No fielders available for catch test');
+                return;
+            }
+            
+            const fielder = game.fielders[fielderIndex];
+            if (!fielder) {
+                console.log(`❌ Fielder ${fielderIndex} not found. Available fielders: 0-${game.fielders.length - 1}`);
+                return;
+            }
+            
+            // Reset systems first
+            game.resetFieldingSystem();
+            game.resetCatchingSystem();
+            
+            // Position ball near fielder for testing (2.5m for diving catch test)
+            game.cricketBall.position.copy(fielder.position);
+            game.cricketBall.position.x += 2.5; // 2.5 meters away for diving catch
+            game.cricketBall.position.y += 2; // In the air at catchable height
+            
+            // Set ball moving toward fielder
+            const direction = fielder.position.clone().sub(game.cricketBall.position);
+            direction.normalize();
+            game.ballPhysics.velocity.copy(direction.multiplyScalar(8)); // Moderate speed
+            game.ballPhysics.velocity.y = -1; // Slight downward trajectory
+            
+            game.ballPhysics.isMoving = true;
+            game.fieldingSystem.ballIsHit = true;
+            
+            console.log(`🧪 Testing catch with ${fielder.userData.description} (Index: ${fielderIndex})`);
+            console.log(`📍 Ball positioned 2.5m away at catchable height`);
+            console.log(`⚡ Ball moving toward fielder at moderate speed`);
+            console.log(`🎯 This should trigger a diving catch attempt!`);
+        };
         
         console.log('Cricket 3D Game initialized successfully!');
         console.log('Camera: Mouse to orbit and zoom');
@@ -2931,6 +3151,11 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('Fielding System:');
         console.log('  testFieldingSystem() - debug fielding system state');
         console.log('  resetFielding() - reset fielding system to idle');
+        console.log('  testCatch(fielderIndex) - test catching system with specific fielder');
+        console.log('Catching System:');
+        console.log('  Regular catch: Ball within 1.5m - uses regularcatch.fbx');
+        console.log('  Diving catch: Ball 2-3m away - uses divingcatch.fbx');
+        console.log('  Catch success depends on distance, speed, and catch type');
         console.log('NOTE: Fielding automatically activates when ball is hit!');
     } catch (error) {
         console.error('Error initializing game:', error);
