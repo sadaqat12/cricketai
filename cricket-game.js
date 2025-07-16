@@ -119,13 +119,32 @@ class CricketGame {
             },
             // Catching system
             catchingSystem: {
-                catchRadius: 3.0, // 3-meter radius for catch detection
-                divingCatchRadius: 2.0, // If ball is between 2-3 meters, use diving catch
-                regularCatchRadius: 1.5, // If ball is within 1.5 meters, use regular catch
+                catchRadius: 5.0, // 5-meter radius for catch detection
+                divingCatchRadius: 3.0, // If ball is between 3-5 meters, use diving catch
+                regularCatchRadius: 2.0, // If ball is within 2 meters, use regular catch
                 catchInProgress: false,
                 catchingFielder: null,
-                catchResult: null // 'success', 'dropped', null
+                catchResult: null, // 'success', 'dropped', null
+                predictiveRange: 8.0, // 8-meter radius for predictive fielder movement
+                anticipationTime: 2.0 // How far ahead (seconds) fielders predict
             }
+        };
+        
+        // Running between wickets system
+        this.runningSystem = {
+            isRunning: false,
+            runState: 'idle', // 'idle', 'running', 'turning', 'waiting'
+            currentEnd: 'batsman', // 'batsman' or 'bowler'
+            targetEnd: 'bowler',
+            runSpeed: 8.0, // meters per second
+            wicketPositions: {
+                batsman: { x: 0, y: 0, z: 9 }, // Batsman's end (positive Z)
+                bowler: { x: 0, y: 0, z: -9 } // Bowler's end (negative Z)
+            },
+            runProgress: 0, // 0 to 1 completion of current run
+            runsCompleted: 0,
+            turningAtEnd: false,
+            waitingForNextRun: false
         };
         
         // Animation system
@@ -707,6 +726,15 @@ class CricketGame {
         this.character = characterModel;
         console.log('🎯 Setting up real FBX character...');
         
+        // Set up userData structure for animations (same as cricket team characters)
+        this.character.userData = {
+            description: 'batsman',
+            animationMixer: null,
+            animations: new Map(),
+            currentAction: null,
+            currentAnimationName: null
+        };
+        
         // Calculate the bounding box to determine appropriate scaling
         const bbox = new THREE.Box3().setFromObject(characterModel);
         const size = bbox.getSize(new THREE.Vector3());
@@ -785,6 +813,9 @@ class CricketGame {
         
         // Add character to scene
         this.scene.add(this.character);
+        
+        // Add to cricketCharacters array so animations get updated
+        this.cricketCharacters.push(this.character);
         
         console.log(`✅ Real FBX character ready! Animations: ${this.characterAnimations.size}, Position: (${this.character.position.x}, ${this.character.position.y}, ${this.character.position.z})`);
         console.log('Scale:', this.character.scale.x);
@@ -879,6 +910,16 @@ class CricketGame {
     setupCharacter(characterModel) {
         this.character = characterModel;
         
+        // Set up userData structure for animations (same as cricket team characters)
+        this.character.userData = {
+            description: 'batsman',
+            animationMixer: null,
+            animations: new Map(),
+            currentAction: null,
+            currentAnimationName: null,
+            ...characterModel.userData // preserve existing userData
+        };
+        
         let characterType;
         if (characterModel.userData?.isSimpleCharacter) {
             characterType = 'Simple';
@@ -956,6 +997,9 @@ class CricketGame {
         
         // Add character to scene
         this.scene.add(this.character);
+        
+        // Add to cricketCharacters array so animations get updated
+        this.cricketCharacters.push(this.character);
         
         console.log(`✅ ${characterType} character ready! Animations: ${this.characterAnimations.size}, Position: (${this.character.position.x}, ${this.character.position.y}, ${this.character.position.z})`);
     }
@@ -1183,6 +1227,9 @@ class CricketGame {
 
     updateBallPhysics(deltaTime) {
         if (!this.cricketBall || !this.ballPhysics.isMoving) return;
+        
+        // Update predictive fielding before checking for catches
+        this.updatePredictiveFielding();
         
         // Check for catching opportunities during ball flight
         this.checkForCatch();
@@ -1718,12 +1765,12 @@ class CricketGame {
         console.log(`🏃 ${fielder.userData.description} is now chasing the ball!`);
         
         // Load running animation if not already loaded
-        this.loadCharacterAnimation(fielder, 'runningcharacter.fbx', fielder.userData.description);
+        if (!fielder.userData.animations || !fielder.userData.animations.has('runningcharacter')) {
+            this.loadCharacterAnimation(fielder, 'runningcharacter.fbx', fielder.userData.description);
+        }
         
-        // Play running animation
-        setTimeout(() => {
-            this.playCricketPlayerAnimation(fielder, 'runningcharacter');
-        }, 100); // Small delay to ensure animation is loaded
+        // Use waitForAnimationAndPlay to ensure animation loads before playing
+        this.waitForAnimationAndPlay(fielder, 'runningcharacter', true);
     }
 
     updateFieldingSystem(deltaTime) {
@@ -1739,6 +1786,8 @@ class CricketGame {
                 this.updateFielderChasing(fielder, deltaTime);
             } else if (fielderState === 'returning') {
                 this.updateFielderReturning(fielder, deltaTime);
+            } else if (fielderState === 'anticipating') {
+                this.updateFielderAnticipating(fielder, deltaTime);
             }
         });
     }
@@ -1803,6 +1852,37 @@ class CricketGame {
         fielder.lookAt(lookAtPosition);
     }
 
+    updateFielderAnticipating(fielder, deltaTime) {
+        if (!this.cricketBall || !this.ballPhysics.isMoving) {
+            // Ball stopped or disappeared, return to idle
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
+            this.playCricketPlayerAnimation(fielder, 'standingidle');
+            return;
+        }
+
+        // Calculate new intercept point
+        const intercept = this.calculateInterceptPoint(fielder, this.fieldingSystem.catchingSystem.anticipationTime);
+        
+        // Check if ball is now within catch range
+        const ballDistance = fielder.position.distanceTo(this.cricketBall.position);
+        if (ballDistance <= this.fieldingSystem.catchingSystem.catchRadius) {
+            // Switch to normal catch checking
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
+            return;
+        }
+        
+        // Continue moving toward intercept point
+        this.moveFielderToPosition(fielder, intercept.position);
+        
+        // If fielder reached the anticipated position but ball isn't there, return to idle
+        const distanceToTarget = fielder.position.distanceTo(intercept.position);
+        if (distanceToTarget < 1.0 && !intercept.canReach) {
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
+            this.playCricketPlayerAnimation(fielder, 'standingidle');
+            console.log(`🤷‍♂️ ${fielder.userData.description} couldn't reach predicted position, returning to idle`);
+        }
+    }
+
     fielderReachBall(fielder) {
         console.log(`🤲 ${fielder.userData.description} has reached the ball!`);
         
@@ -1845,7 +1925,7 @@ class CricketGame {
         this.fieldingSystem.fielderStates.set(fielder.userData.description, 'returning');
         
         // Start running animation for return journey
-        this.playCricketPlayerAnimation(fielder, 'runningcharacter');
+        this.waitForAnimationAndPlay(fielder, 'runningcharacter', true);
     }
 
     fielderReachedOriginalPosition(fielder) {
@@ -1944,6 +2024,124 @@ class CricketGame {
         setTimeout(() => {
             this.resetFieldingSystem();
         }, Math.max(2500, estimatedTime * 1000 + 1000)); // Dynamic timeout based on throw time
+    }
+
+    // Predict where the ball will be after a given time
+    predictBallPosition(timeAhead) {
+        if (!this.cricketBall || !this.ballPhysics.isMoving) {
+            return this.cricketBall ? this.cricketBall.position.clone() : new THREE.Vector3(0, 0, 0);
+        }
+
+        const currentPos = this.cricketBall.position.clone();
+        const velocity = this.ballPhysics.velocity.clone();
+        
+        // Apply gravity over time
+        const gravityEffect = 0.5 * this.ballPhysics.gravity * timeAhead * timeAhead;
+        
+        // Calculate predicted position
+        const predictedPos = currentPos.clone();
+        predictedPos.add(velocity.clone().multiplyScalar(timeAhead));
+        predictedPos.y += gravityEffect; // Add gravity effect
+        
+        // Ensure predicted position doesn't go below ground
+        if (predictedPos.y < 0.035) {
+            predictedPos.y = 0.035;
+        }
+        
+        return predictedPos;
+    }
+
+    // Calculate optimal intercept point for a fielder
+    calculateInterceptPoint(fielder, timeAhead = 2.0) {
+        const fielderSpeed = 8.0; // meters per second
+        const predictedBallPos = this.predictBallPosition(timeAhead);
+        const fielderPos = fielder.position.clone();
+        
+        // Calculate distance fielder can travel in timeAhead
+        const maxFielderDistance = fielderSpeed * timeAhead;
+        
+        // Calculate distance to predicted ball position
+        const distanceToBall = fielderPos.distanceTo(predictedBallPos);
+        
+        // If fielder can reach the predicted position, return it
+        if (distanceToBall <= maxFielderDistance) {
+            return {
+                position: predictedBallPos,
+                canReach: true,
+                timeToReach: distanceToBall / fielderSpeed
+            };
+        }
+        
+        // Otherwise, calculate the closest point fielder can reach
+        const direction = predictedBallPos.clone().sub(fielderPos).normalize();
+        const interceptPos = fielderPos.clone().add(direction.multiplyScalar(maxFielderDistance));
+        
+        return {
+            position: interceptPos,
+            canReach: false,
+            timeToReach: timeAhead
+        };
+    }
+
+    // Update fielder positions based on ball trajectory prediction
+    updatePredictiveFielding() {
+        if (!this.cricketBall || !this.ballPhysics.isMoving || this.fieldingSystem.catchingSystem.catchInProgress) {
+            return;
+        }
+
+        const anticipationTime = this.fieldingSystem.catchingSystem.anticipationTime;
+        const predictiveRange = this.fieldingSystem.catchingSystem.predictiveRange;
+
+        this.fielders.forEach(fielder => {
+            const fielderState = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+            
+            // Only move idle fielders
+            if (fielderState !== 'idle') {
+                return;
+            }
+
+            const intercept = this.calculateInterceptPoint(fielder, anticipationTime);
+            const distanceToIntercept = fielder.position.distanceTo(intercept.position);
+            
+            // Only move if the intercept point is within predictive range and fielder can help
+            if (distanceToIntercept <= predictiveRange && intercept.canReach) {
+                // Start moving fielder toward intercept point
+                this.fieldingSystem.fielderStates.set(fielder.userData.description, 'anticipating');
+                this.moveFielderToPosition(fielder, intercept.position);
+                
+                console.log(`🔮 ${fielder.userData.description} moving to intercept ball (${distanceToIntercept.toFixed(1)}m away)`);
+            }
+        });
+    }
+
+    // Move fielder toward a target position
+    moveFielderToPosition(fielder, targetPosition) {
+        const fielderPos = fielder.position;
+        const direction = targetPosition.clone().sub(fielderPos);
+        direction.y = 0; // Keep on ground
+        
+        const distance = direction.length();
+        
+        if (distance > 0.5) { // Only move if not already close
+            direction.normalize();
+            const moveSpeed = 7.0; // Predictive movement speed
+            
+            // Move fielder gradually (this will be called each frame)
+            const moveDistance = moveSpeed * 0.016; // Assuming ~60fps
+            fielder.position.add(direction.multiplyScalar(moveDistance));
+            
+            // Make fielder face movement direction
+            const lookAtPos = fielder.position.clone().add(direction);
+            lookAtPos.y = fielder.position.y;
+            fielder.lookAt(lookAtPos);
+            
+            // Start running animation if not already playing
+            // Load running animation if not already loaded
+            if (!fielder.userData.animations || !fielder.userData.animations.has('runningcharacter')) {
+                this.loadCharacterAnimation(fielder, 'runningcharacter.fbx', fielder.userData.description || 'fielder');
+            }
+            this.waitForAnimationAndPlay(fielder, 'runningcharacter', true);
+        }
     }
 
     checkForCatch() {
@@ -2217,6 +2415,220 @@ class CricketGame {
         return this.playShot('powerShot');
     }
 
+    // Running between wickets system
+    startRun() {
+        // Only allow running if not already running and not in middle of swing
+        if (this.runningSystem.isRunning || this.batSwing.isSwinging) {
+            console.log('❌ Cannot start run - already running or swinging');
+            return false;
+        }
+
+        // If waiting at the other end, run back
+        if (this.runningSystem.waitingForNextRun) {
+            this.runningSystem.waitingForNextRun = false;
+        }
+
+        this.runningSystem.isRunning = true;
+        this.runningSystem.runState = 'running';
+        this.runningSystem.runProgress = 0;
+        
+        // Determine target end
+        if (this.runningSystem.currentEnd === 'batsman') {
+            this.runningSystem.targetEnd = 'bowler';
+        } else {
+            this.runningSystem.targetEnd = 'batsman';
+        }
+        
+        console.log(`🏃‍♂️ Starting run from ${this.runningSystem.currentEnd} to ${this.runningSystem.targetEnd}`);
+        
+        // Load running animation if not already loaded
+        if (!this.character.userData.animations || !this.character.userData.animations.has('runningcharacter')) {
+            this.loadCharacterAnimation(this.character, 'runningcharacter.fbx', 'batsman');
+        }
+        
+        // Use waitForAnimationAndPlay to ensure animation loads before playing
+        this.waitForAnimationAndPlay(this.character, 'runningcharacter', true);
+        
+        return true;
+    }
+
+    updateRunningSystem(deltaTime) {
+        if (!this.runningSystem.isRunning) return;
+
+        const currentPos = this.runningSystem.wicketPositions[this.runningSystem.currentEnd];
+        const targetPos = this.runningSystem.wicketPositions[this.runningSystem.targetEnd];
+        
+        // Calculate distance to cover
+        const totalDistance = Math.sqrt(
+            Math.pow(targetPos.x - currentPos.x, 2) + 
+            Math.pow(targetPos.z - currentPos.z, 2)
+        );
+        
+        // Update progress based on run speed
+        const progressIncrement = (this.runningSystem.runSpeed * deltaTime) / totalDistance;
+        this.runningSystem.runProgress += progressIncrement;
+        
+        // Check if reached the end
+        if (this.runningSystem.runProgress >= 1.0) {
+            this.completeRun();
+            return;
+        }
+        
+        // Update character position
+        const newX = currentPos.x + (targetPos.x - currentPos.x) * this.runningSystem.runProgress;
+        const newZ = currentPos.z + (targetPos.z - currentPos.z) * this.runningSystem.runProgress;
+        
+        this.character.position.set(newX, 0, newZ);
+        
+        // Make character face the direction they're running
+        const direction = new THREE.Vector3(targetPos.x - currentPos.x, 0, targetPos.z - currentPos.z);
+        if (direction.length() > 0) {
+            direction.normalize();
+            const lookAtPos = this.character.position.clone().add(direction);
+            this.character.lookAt(lookAtPos);
+        }
+    }
+
+    completeRun() {
+        console.log(`✅ Run completed! Reached ${this.runningSystem.targetEnd} end`);
+        
+        // Prevent multiple calls to completeRun
+        if (this.runningSystem.runState === 'turning') {
+            console.log('⚠️ Turn already in progress, skipping');
+            return;
+        }
+        
+        // Swap current and target ends
+        this.runningSystem.currentEnd = this.runningSystem.targetEnd;
+        this.runningSystem.runProgress = 0;
+        this.runningSystem.runsCompleted++;
+        
+        // Start turning animation
+        this.runningSystem.runState = 'turning';
+        this.runningSystem.turningAtEnd = true;
+        
+        // Load turning animation if not already loaded
+        if (!this.character.userData.animations || !this.character.userData.animations.has('leftturn')) {
+            this.loadCharacterAnimation(this.character, 'leftturn.fbx', 'batsman');
+        }
+        if (!this.character.userData.animations || !this.character.userData.animations.has('standingidle')) {
+            this.loadCharacterAnimation(this.character, 'standingidle.fbx', 'batsman');
+        }
+        
+        console.log('🔄 Attempting to play turn animation...');
+        
+        // Store original rotation for turn animation
+        const originalRotation = this.character.rotation.y;
+        console.log(`🔄 Character rotation before turn: ${originalRotation}`);
+        
+        // Use waitForAnimationAndPlay to ensure turn animation loads before playing
+        this.waitForAnimationAndPlay(this.character, 'leftturn', false, () => {
+            // Only proceed if still in turning state
+            if (this.runningSystem.runState === 'turning') {
+                console.log('🔄 Turn animation completed via callback, transitioning to idle');
+                // Complete the turn rotation (180 degrees)
+                this.character.rotation.y = originalRotation + Math.PI;
+                console.log(`🔄 Character rotation after turn: ${this.character.rotation.y}`);
+                this.finishTurn();
+            }
+        });
+        
+        // Safety timeout in case callback fails
+        setTimeout(() => {
+            if (this.runningSystem.runState === 'turning') {
+                console.log('⚠️ Turn animation timeout, forcing completion');
+                this.character.rotation.y = originalRotation + Math.PI;
+                this.finishTurn();
+            }
+        }, 2000); // 2 second safety timeout
+    }
+
+    finishTurn() {
+        // Prevent multiple calls to finishTurn
+        if (this.runningSystem.runState !== 'turning') {
+            console.log('⚠️ finishTurn called but not in turning state, skipping');
+            return;
+        }
+        
+        console.log(`🔄 Turn completed at ${this.runningSystem.currentEnd} end`);
+        
+        this.runningSystem.runState = 'waiting';
+        this.runningSystem.turningAtEnd = false;
+        this.runningSystem.isRunning = false;
+        this.runningSystem.waitingForNextRun = true;
+        
+        // Just go to idle after turn, don't auto-slide
+        this.playCricketPlayerAnimation(this.character, 'standingidle');
+        
+        console.log(`⏳ Waiting for next run command. Press R to run back, S to slide! (Total runs: ${this.runningSystem.runsCompleted})`);
+    }
+
+    // Debug function to check what animations are available
+    debugAnimations() {
+        console.log('🎬 Animation Debug Info:');
+        console.log('Main character animations:');
+        if (this.character && this.character.userData.animations) {
+            this.character.userData.animations.forEach((action, name) => {
+                console.log(`  - ${name}: ${action.isRunning() ? 'RUNNING' : 'STOPPED'}`);
+            });
+        } else {
+            console.log('  No character animations available');
+        }
+        
+        console.log('Cricket team animations:');
+        this.cricketCharacters.forEach(char => {
+            if (char && char.userData.animations) {
+                console.log(`  ${char.userData.description}:`);
+                char.userData.animations.forEach((action, name) => {
+                    console.log(`    - ${name}: ${action.isRunning() ? 'RUNNING' : 'STOPPED'}`);
+                });
+            }
+        });
+    }
+
+    // Separate slide function
+    playSlideAnimation() {
+        if (!this.character) {
+            console.log('❌ No character available for slide animation');
+            return false;
+        }
+
+        console.log('🏃‍♂️ Playing slide animation...');
+        
+        // Load both sliding and idle animations
+        this.loadCharacterAnimation(this.character, 'runningslide.fbx', 'batsman');
+        this.loadCharacterAnimation(this.character, 'standingidle.fbx', 'batsman');
+        
+        setTimeout(() => {
+            // Play slide animation once, then automatically transition to idle
+            this.playCricketPlayerAnimationOnce(this.character, 'runningslide', () => {
+                console.log('🧍 Slide animation completed, transitioning to idle');
+                this.playCricketPlayerAnimation(this.character, 'standingidle');
+            });
+        }, 200); // Wait for animations to load
+        
+        return true;
+    }
+
+    resetRunningSystem() {
+        this.runningSystem.isRunning = false;
+        this.runningSystem.runState = 'idle';
+        this.runningSystem.currentEnd = 'batsman';
+        this.runningSystem.targetEnd = 'bowler';
+        this.runningSystem.runProgress = 0;
+        this.runningSystem.runsCompleted = 0;
+        this.runningSystem.turningAtEnd = false;
+        this.runningSystem.waitingForNextRun = false;
+        
+        // Reset character position to batsman's end
+        this.character.position.set(0, 0, 9);
+        this.character.lookAt(0, 0, -10); // Face bowler
+        
+        this.playCricketPlayerAnimation(this.character, 'standingidle');
+        
+        console.log('🔄 Running system reset - batsman back at starting position');
+    }
+
     loadCricketTeam() {
         console.log('🏏 Loading cricket team...');
         
@@ -2407,8 +2819,8 @@ class CricketGame {
                 const clip = animFbx.animations[0];
                 const action = character.userData.animationMixer.clipAction(clip);
                 
-                // Extract animation name from file
-                const animName = animationFile.replace('.fbx', '');
+                // Extract animation name from file - handle both file paths and file names
+                const animName = animationFile.replace('.fbx', '').replace(/.*\//, '');
                 character.userData.animations.set(animName, action);
                 
                 // Play the animation if it's the batsman idle animation
@@ -2427,6 +2839,7 @@ class CricketGame {
                 }
                 
                 console.log(`✅ ${animName} animation loaded for ${characterName}`);
+                console.log(`Available animations for ${characterName}:`, Array.from(character.userData.animations.keys()));
             }
         }, undefined, (error) => {
             console.log(`❌ Could not load ${animationFile} for ${characterName}:`, error);
@@ -2453,6 +2866,41 @@ class CricketGame {
         console.log('Playing animation:', animationName);
     }
 
+    // Helper function to wait for animation to load and then play it
+    waitForAnimationAndPlay(character, animationName, isLoop = true, callback = null) {
+        const maxWaitTime = 5000; // 5 seconds max wait
+        const checkInterval = 100; // Check every 100ms
+        let totalWaitTime = 0;
+        
+        const checkAndPlay = () => {
+            if (character.userData.animations && character.userData.animations.has(animationName)) {
+                console.log(`🎬 Animation ${animationName} is loaded, playing now...`);
+                if (isLoop) {
+                    return this.playCricketPlayerAnimation(character, animationName);
+                } else {
+                    return this.playCricketPlayerAnimationOnce(character, animationName, callback);
+                }
+            } else if (totalWaitTime < maxWaitTime) {
+                totalWaitTime += checkInterval;
+                setTimeout(checkAndPlay, checkInterval);
+            } else {
+                console.log(`❌ Timeout waiting for ${animationName} to load after ${maxWaitTime}ms`);
+                console.log(`Available animations for ${character.userData.description || 'character'}:`, 
+                    character.userData.animations ? Array.from(character.userData.animations.keys()) : 'none');
+                
+                // For fielders, if running animation is not available, just keep idle
+                if (character.userData.description && character.userData.description !== 'batsman' && animationName === 'runningcharacter') {
+                    console.log(`🔄 Fielder ${character.userData.description} falling back to idle animation`);
+                    this.playCricketPlayerAnimation(character, 'standingidle');
+                }
+                
+                return false;
+            }
+        };
+        
+        checkAndPlay();
+    }
+
     // Cricket team animation management methods
     playCricketPlayerAnimation(character, animationName) {
         if (!character || !character.userData || !character.userData.animations) {
@@ -2461,7 +2909,8 @@ class CricketGame {
         }
         
         if (!character.userData.animations.has(animationName)) {
-            console.log(`Animation ${animationName} not loaded for this character`);
+            console.log(`❌ Animation ${animationName} not loaded for this character`);
+            console.log(`Available animations for ${character.userData.description || 'character'}:`, Array.from(character.userData.animations.keys()));
             return false;
         }
         
@@ -2479,7 +2928,66 @@ class CricketGame {
         character.userData.currentAction = action;
         character.userData.currentAnimationName = animationName;
         
-        console.log(`Playing ${animationName} on ${character.userData.description || 'character'}`);
+        console.log(`✅ Playing ${animationName} on ${character.userData.description || 'character'}`);
+        return true;
+    }
+
+    // Play animation once (no loop) with callback when finished
+    playCricketPlayerAnimationOnce(character, animationName, onFinishedCallback) {
+        console.log(`🔍 playCricketPlayerAnimationOnce called for ${animationName}`);
+        
+        if (!character || !character.userData || !character.userData.animations) {
+            console.log('❌ Character or animations not available for once animation');
+            return false;
+        }
+        
+        if (!character.userData.animations.has(animationName)) {
+            console.log(`❌ Animation ${animationName} not loaded for this character`);
+            console.log('Available animations:', Array.from(character.userData.animations.keys()));
+            return false;
+        }
+        
+        // Stop current animation
+        if (character.userData.currentAction) {
+            character.userData.currentAction.stop();
+        }
+        
+        // Clean up any existing event listeners to prevent multiple callbacks
+        if (character.userData.animationMixer && character.userData.currentFinishedListener) {
+            character.userData.animationMixer.removeEventListener('finished', character.userData.currentFinishedListener);
+            character.userData.currentFinishedListener = null;
+        }
+        
+        // Play new animation ONCE
+        const action = character.userData.animations.get(animationName);
+        action.reset();
+        action.setLoop(THREE.LoopOnce); // Play once, don't loop
+        action.clampWhenFinished = true; // Stay on last frame when finished
+        action.play();
+        
+        character.userData.currentAction = action;
+        character.userData.currentAnimationName = animationName;
+        
+        // Set up callback when animation finishes
+        if (onFinishedCallback && character.userData.animationMixer) {
+            const mixer = character.userData.animationMixer;
+            console.log('🔗 Setting up animation finished callback');
+            
+            const onFinished = (event) => {
+                console.log('🎬 Animation finished event received:', event);
+                if (event.action === action) {
+                    mixer.removeEventListener('finished', onFinished);
+                    character.userData.currentFinishedListener = null;
+                    onFinishedCallback();
+                }
+            };
+            
+            // Store the listener reference to clean up later
+            character.userData.currentFinishedListener = onFinished;
+            mixer.addEventListener('finished', onFinished);
+        }
+        
+        console.log(`✅ Playing ${animationName} ONCE on ${character.userData.description || 'character'}`);
         return true;
     }
 
@@ -2575,6 +3083,18 @@ class CricketGame {
                         const nextIndex = (currentIndex + 1) % animNames.length;
                         this.playAnimation(animNames[nextIndex]);
                     }
+                    break;
+                case 'KeyR':
+                    // Start running between wickets
+                    this.startRun();
+                    break;
+                case 'KeyS':
+                    // Play slide animation
+                    this.playSlideAnimation();
+                    break;
+                case 'KeyT':
+                    // Reset running system (for testing)
+                    this.resetRunningSystem();
                     break;
                 case 'Digit1':
                     // Test bowler catching animation
@@ -2747,6 +3267,9 @@ class CricketGame {
         // Update fielding system
         this.updateFieldingSystem(deltaTime);
         
+        // Update running system
+        this.updateRunningSystem(deltaTime);
+        
         // Check for ball-bat collision
         if (this.checkBallBatCollision() && this.batSwing.isSwinging) {
             const hit = this.hitBall();
@@ -2856,6 +3379,43 @@ document.addEventListener('DOMContentLoaded', () => {
                 const shot = game.shotTypes[shotType];
                 console.log(`  ${shotType}: ${shot.description} (Power: ${shot.power}, Direction: [${shot.direction}], Height: ${shot.height})`);
             });
+        };
+        
+        // Running system controls
+        window.startRun = () => game.startRun();
+        window.playSlide = () => game.playSlideAnimation();
+        window.resetRunning = () => game.resetRunningSystem();
+        window.showRunningStatus = () => {
+            console.log('🏃‍♂️ Running System Status:');
+            console.log(`  Running: ${game.runningSystem.isRunning}`);
+            console.log(`  State: ${game.runningSystem.runState}`);
+            console.log(`  Current End: ${game.runningSystem.currentEnd}`);
+            console.log(`  Target End: ${game.runningSystem.targetEnd}`);
+            console.log(`  Progress: ${(game.runningSystem.runProgress * 100).toFixed(1)}%`);
+            console.log(`  Runs Completed: ${game.runningSystem.runsCompleted}`);
+            console.log(`  Waiting for Next Run: ${game.runningSystem.waitingForNextRun}`);
+        };
+        
+        // Debug turn animation
+        window.testTurnAnimation = () => {
+            console.log('🔍 Testing turn animation...');
+            if (game.character && game.character.userData && game.character.userData.animations) {
+                console.log('Available animations:', Array.from(game.character.userData.animations.keys()));
+                game.loadCharacterAnimation(game.character, 'leftturn.fbx', 'batsman');
+                setTimeout(() => {
+                    game.playCricketPlayerAnimationOnce(game.character, 'leftturn', () => {
+                        console.log('✅ Turn animation test completed!');
+                        game.playCricketPlayerAnimation(game.character, 'standingidle');
+                    });
+                }, 300);
+            } else {
+                console.log('❌ Character not ready for animation test');
+            }
+        };
+        
+        // Debug animation states
+        window.debugAnimations = () => {
+            game.debugAnimations();
         };
         
         // Debug helpers
@@ -3139,11 +3699,20 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  swingBat(direction, power) - custom batting');
         console.log('  playHittingAnimation() - play hitting animation');
         console.log('  playIdleAnimation() - return to idle animation');
+        console.log('Running Commands:');
+        console.log('  startRun() - start running between wickets');
+        console.log('  playSlide() - play slide animation');
+        console.log('  resetRunning() - reset running system');
+        console.log('  showRunningStatus() - show current running status');
+        console.log('  Press R key - run between wickets');
+        console.log('  Press S key - play slide animation');
+        console.log('  Press T key - reset running system');
         console.log('Debugging:');
         console.log('  testShotDirection("shotType") - debug shot direction');
         console.log('  testFielderSelection("shotType") - test fielder assignment');
         console.log('  testThrowingPower("fielderName") - test throw strength');
         console.log('  showFieldCoords() - show field coordinate system');
+        console.log('  debugAnimations() - debug animation states and availability');
         console.log('Ball Trail:');
         console.log('  toggleBallTrail() - turn trail on/off');
         console.log('  clearBallTrail() - clear current trail');
