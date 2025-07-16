@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cricket 3D - Three.js Game</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Import map for ES6 modules -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="ui">
+            <h1>Cricket 3D ✨</h1>
+            <div id="controls">
+                <p>🌟 Cosmic Cricket Field 🌟</p>
+                <p>Mouse: Orbit & Zoom | WASD/Arrows: Move Player</p>
+                <p>Space: Change Animation</p>
+            </div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // Simple initialization - wait for DOM then start
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🎮 DOM loaded, starting Cricket 3D...');
+            
+            // Add some visual feedback
+            const canvas = document.getElementById('gameCanvas');
+            if (canvas) {
+                canvas.style.background = 'linear-gradient(135deg, #000033 0%, #000066 100%)';
+                console.log('✅ Canvas element found');
+            } else {
+                console.error('❌ Canvas element not found!');
+            }
+        });
+    </script>
+    
+    <!-- Main game script as ES6 module -->
+    <script type="module" src="cricket-game.js"></script>
+</body>
+</html> 
