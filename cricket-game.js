@@ -107,6 +107,14 @@ class CricketGame {
         this.fielders = [];
         this.cricketCharacters = [];
         
+        // Bowler receiving system
+        this.bowlerReceivingSystem = {
+            isReceivingThrow: false,
+            catchZone: null, // Will be created when bowler loads
+            catchZoneRadius: 2.5, // Units around bowler for automatic catch
+            originalPosition: null // Store bowler's original position
+        };
+        
         // Fielding system
         this.fieldingSystem = {
             ballIsHit: false,
@@ -150,6 +158,27 @@ class CricketGame {
             runsCompleted: 0,
             turningAtEnd: false,
             waitingForNextRun: false
+        };
+
+        // Cricket scoring system
+        this.cricketScore = {
+            runs: 0,
+            wickets: 0,
+            overs: 0,
+            balls: 0,
+            ballsThisBall: 0,
+            lastBoundaryType: null, // 'four' or 'six'
+            ballHasBounced: false,
+            boundaryAwarded: false
+        };
+
+        // Ball state management
+        this.ballState = {
+            isActive: false,
+            isComplete: false,
+            runsThisBall: 0,
+            ballType: 'normal', // 'normal', 'boundary', 'missed'
+            completionReason: null // 'boundary', 'fielded', 'missed'
         };
         
         // Animation system
@@ -752,7 +781,6 @@ class CricketGame {
             if (fbxObject.animations && fbxObject.animations.length > 0) {
                 const idle = this.animationMixer.clipAction(fbxObject.animations[0]);
                 idle.play();
-                console.log('✅ Idling animation loaded successfully!');
             } else {
                 console.warn('⚠️ No animations found in the FBX file');
             }
@@ -869,8 +897,7 @@ class CricketGame {
         // Add to cricketCharacters array so animations get updated
         this.cricketCharacters.push(this.character);
         
-        console.log(`✅ Real FBX character ready! Animations: ${this.characterAnimations.size}, Position: (${this.character.position.x}, ${this.character.position.y}, ${this.character.position.z})`);
-        console.log('Scale:', this.character.scale.x);
+        console.log(`✅ Character ready with ${this.characterAnimations.size} animations`);
     }
 
     enhanceCharacterMaterial(material) {
@@ -1053,7 +1080,7 @@ class CricketGame {
         // Add to cricketCharacters array so animations get updated
         this.cricketCharacters.push(this.character);
         
-        console.log(`✅ ${characterType} character ready! Animations: ${this.characterAnimations.size}, Position: (${this.character.position.x}, ${this.character.position.y}, ${this.character.position.z})`);
+        console.log(`✅ ${characterType} character ready`);
     }
 
     playHittingAnimation() {
@@ -1210,11 +1237,6 @@ class CricketGame {
                 const animName = animationFile.replace('.fbx', '');
                 this.characterAnimations.set(animName, action);
                 
-                console.log(`✅ ${animName} animation loaded for main character`);
-                console.log(`Main character now has ${this.characterAnimations.size} animations:`);
-                this.characterAnimations.forEach((action, name) => {
-                    console.log(`  - ${name}`);
-                });
             } else {
                 console.log(`⚠️ No animations found in ${animationFile}`);
             }
@@ -1256,7 +1278,7 @@ class CricketGame {
                     if (child.material) {
                         child.material.needsUpdate = true;
                     }
-                    console.log('Ball mesh found:', child.name, 'Material:', child.material);
+                    // console.log('Ball mesh found:', child.name, 'Material:', child.material);
                 }
             });
             
@@ -1301,6 +1323,9 @@ class CricketGame {
             // Bounce
             this.ballPhysics.velocity.y *= -this.ballPhysics.bounceCoefficient;
             
+            // Track ball bounce for boundary scoring
+            this.checkBallBounce();
+            
             // Apply friction to horizontal movement
             this.ballPhysics.velocity.x *= this.ballPhysics.friction;
             this.ballPhysics.velocity.z *= this.ballPhysics.friction;
@@ -1310,16 +1335,32 @@ class CricketGame {
                 this.ballPhysics.velocity.set(0, 0, 0);
                 this.ballPhysics.isMoving = false;
                 console.log('Ball stopped');
+                
+                // If ball stopped and wasn't fielded, complete with current runs
+                if (this.ballState.isActive && !this.ballState.isComplete && 
+                    !this.runningSystem.isRunning && !this.runningSystem.waitingForNextRun &&
+                    !this.fieldingSystem.chasingFielder && !this.cricketScore.boundaryAwarded) {
+                    
+                    this.ballState.ballType = 'normal';
+                    this.ballState.completionReason = 'stopped';
+                    
+                    setTimeout(() => {
+                        this.completeBall();
+                    }, 1000);
+                }
             }
         }
         
-        // Keep ball within field boundaries
+        // Keep ball within field boundaries and handle scoring
         const maxDistance = this.FIELD_RADIUS - 2;
         const ballDistance = Math.sqrt(
             this.cricketBall.position.x ** 2 + this.cricketBall.position.z ** 2
         );
         
         if (ballDistance > maxDistance) {
+            // Check if ball has crossed boundary for scoring
+            this.handleBoundaryScoring();
+            
             // Simple boundary collision - reverse horizontal velocity
             this.ballPhysics.velocity.x *= -0.5;
             this.ballPhysics.velocity.z *= -0.5;
@@ -1328,6 +1369,9 @@ class CricketGame {
 
     bowlBall(direction, speed = 15) {
         if (!this.cricketBall) return;
+
+        // Activate the ball state to signal that a new play has begun.
+        this.startNewBall();
         
         // Clear previous trail
         this.clearBallTrail();
@@ -1352,7 +1396,6 @@ class CricketGame {
         );
         
         this.ballPhysics.isMoving = true;
-        console.log('Ball bowled with velocity:', this.ballPhysics.velocity);
     }
 
     createBatCollisionSphere() {
@@ -1589,8 +1632,6 @@ class CricketGame {
         this.addMinimalShotVariation();
         
         console.log(`✅ ${shot.description} executed!`);
-        console.log(`Final ball velocity: X=${this.ballPhysics.velocity.x.toFixed(1)}, Y=${this.ballPhysics.velocity.y.toFixed(1)}, Z=${this.ballPhysics.velocity.z.toFixed(1)}`);
-        console.log(`Power: ${finalPower.toFixed(1)}, Height: ${heightVelocity.toFixed(1)}, Timing: ${this.batSwing.timing}`);
         
         // Trigger fielding system
         this.onBallHit();
@@ -1722,7 +1763,6 @@ class CricketGame {
             shotZone = 'behind'; // Positive Z = behind wicket
         }
         
-        console.log(`🎯 Shot direction: ${shotZone} (velocity: ${velocity.x.toFixed(1)}, ${velocity.z.toFixed(1)})`);
         
         // Find fielders in the appropriate zone
         const preferredFielders = this.fieldingSystem.fieldingZones[shotZone] || [];
@@ -1936,6 +1976,14 @@ class CricketGame {
     }
 
     fielderReachBall(fielder) {
+        // If a boundary has been scored, the ball is dead.
+        if (this.cricketScore.boundaryAwarded) {
+            console.log('📝 Ball already went for a boundary. Fielder cannot field it.');
+            this.ballPhysics.isMoving = false; // Stop the ball's movement
+            this.fieldingSystem.ballIsHit = false; // End the fielding sequence
+            this.startFielderReturning(fielder); // Send the fielder back to position
+            return;
+        }
         console.log(`🤲 ${fielder.userData.description} has reached the ball!`);
         
         // Change state to throwing
@@ -1948,6 +1996,17 @@ class CricketGame {
         // Position ball near fielder
         this.cricketBall.position.copy(fielder.position);
         this.cricketBall.position.y += 1.5; // Hand height
+        
+        // Ball is now fielded - complete with running runs
+        if (this.ballState.isActive && !this.ballState.isComplete) {
+            this.ballState.ballType = 'fielded';
+            this.ballState.completionReason = 'fielded';
+            
+            // Complete the ball immediately when fielded
+            setTimeout(() => {
+                this.completeBall();
+            }, 1000);
+        }
         
         // Load and play throw animation
         this.loadCharacterAnimation(fielder, 'Throw.fbx', fielder.userData.description);
@@ -2007,6 +2066,9 @@ class CricketGame {
         
         console.log(`🎯 ${fielder.userData.description} is throwing ball back to bowler!`);
         
+        // Notify bowler to prepare for incoming throw
+        this.prepareBowlerForIncomingThrow();
+        
         // Set trail color for fielder throws (green)
         this.setBallTrailColor(0x44ff44);
         
@@ -2020,8 +2082,6 @@ class CricketGame {
         const distance = throwDirection.length();
         throwDirection.normalize(); // Convert to unit vector
         
-        console.log(`📏 Distance to bowler: ${distance.toFixed(1)} units`);
-        console.log(`🧭 Throw direction: X=${throwDirection.x.toFixed(2)}, Y=${throwDirection.y.toFixed(2)}, Z=${throwDirection.z.toFixed(2)}`);
         
         // Calculate precise throwing velocity for accurate delivery
         // Use controlled power based on distance to avoid overshooting
@@ -2033,7 +2093,6 @@ class CricketGame {
         const distanceMultiplier = 1 + (normalizedDistance * 0.8); // Scale from 1.0 to 1.8 max
         const throwSpeed = baseThrowSpeed * distanceMultiplier;
         
-        console.log(`⚡ Throw speed: ${throwSpeed.toFixed(1)} (distance: ${distance.toFixed(1)}, normalized: ${normalizedDistance.toFixed(2)}, multiplier: ${distanceMultiplier.toFixed(2)})`);
         
         // Calculate required velocity to reach bowler precisely
         // Use projectile motion equation: R = (v² * sin(2θ)) / g
@@ -2064,9 +2123,6 @@ class CricketGame {
         
         this.ballPhysics.isMoving = true;
         
-        console.log(`🚀 Ball thrown with velocity: X=${this.ballPhysics.velocity.x.toFixed(1)}, Y=${this.ballPhysics.velocity.y.toFixed(1)}, Z=${this.ballPhysics.velocity.z.toFixed(1)}`);
-        console.log(`📐 Physics calculation: Required speed=${requiredSpeed.toFixed(1)}, Final speed=${finalThrowSpeed.toFixed(1)}, Launch angle=30°`);
-        console.log(`📏 Horizontal distance: ${horizontalDistance.toFixed(1)} units`);
         
         // Calculate estimated time to target for timeout
         const horizontalSpeed = Math.sqrt(this.ballPhysics.velocity.x ** 2 + this.ballPhysics.velocity.z ** 2);
@@ -2341,7 +2397,6 @@ class CricketGame {
             // Ball continues, fielding system will pick it up normally
         }, 1000);
     }
-
     resetCatchingSystem() {
         const catching = this.fieldingSystem.catchingSystem;
         
@@ -2390,6 +2445,318 @@ class CricketGame {
         });
         
         console.log('✅ Fielding system reset - all fielders back to original positions and idle');
+    }
+
+    // Scoring methods
+    updateCricketScore() {
+        // Update score display using existing menu system
+        if (window.menuSystem && window.menuSystem.updateScore) {
+            window.menuSystem.updateScore(
+                this.cricketScore.runs,
+                this.cricketScore.wickets,
+                this.cricketScore.overs.toFixed(1)
+            );
+        } else {
+            console.warn(`⚠️ Cannot update score display - menu system not available`);
+        }
+        
+        console.log(`📊 Score updated: ${this.cricketScore.runs}/${this.cricketScore.wickets} in ${this.cricketScore.overs.toFixed(1)} overs`);
+    }
+
+    // Start a new ball
+    startNewBall() {
+        if (this.ballState.isActive) {
+            return;
+        }
+        
+        this.ballState.isActive = true;
+        this.ballState.isComplete = false;
+        this.ballState.runsThisBall = 0;
+        this.ballState.ballType = 'normal';
+        this.ballState.completionReason = null;
+        
+        this.runningSystem.runsCompleted = 0;
+        this.runningSystem.isRunning = false;
+        this.runningSystem.runState = 'idle';
+        this.runningSystem.currentEnd = 'batsman';
+        this.runningSystem.targetEnd = 'bowler';
+        this.runningSystem.runProgress = 0;
+        this.runningSystem.waitingForNextRun = false;
+        
+        this.bowlerReceivingSystem.isReceivingThrow = false;
+        
+        this.resetBallTracking();
+        
+        console.log('🏏 New ball started');
+    }
+
+    // Force complete the ball (used when bowler catches - has priority)
+    forceCompleteBall() {
+        if (!this.ballState.isActive) {
+            console.log('⚠️ Force ball completion blocked - ball not active');
+            return;
+        }
+        console.log('🔨 Force completing ball (e.g., bowler catch has priority)');
+        this.doCompleteBall();
+    }
+
+    // Complete the current ball
+    completeBall() {
+        if (!this.ballState.isActive || this.ballState.isComplete) {
+            if (this.ballState.isComplete) {
+                 console.log('⚠️ Ball completion blocked - already completed');
+            } else {
+                 console.log('⚠️ Ball completion blocked - ball not active');
+            }
+            return;
+        }
+        this.doCompleteBall();
+    }
+    
+    // Internal method that actually completes the ball
+    doCompleteBall() {
+        // The PRIMARY check to prevent multiple completions.
+        if (this.ballState.isComplete) {
+            console.log('⚠️ Ball completion blocked - already completed.');
+            return;
+        }
+
+        // SET state immediately to lock this function.
+        this.ballState.isComplete = true; 
+        this.ballState.isActive = false; // The ball is no longer active.
+        
+        // If a boundary was scored, the runs are already set.
+        // Otherwise, the runs are the number of completed runs between wickets.
+        if (!this.cricketScore.boundaryAwarded) {
+            this.ballState.runsThisBall = this.runningSystem.runsCompleted;
+        }
+        
+        console.log(`🎯 Completing ball: ${this.ballState.runsThisBall} runs (${this.ballState.ballType})`);
+        console.log(`🔍 Before adding runs - Current total: ${this.cricketScore.runs} runs`);
+
+        // STOP running system to prevent continuous updates
+        this.runningSystem.isRunning = false;
+        this.runningSystem.runState = 'idle';
+        
+        // Add runs from this ball to total score
+        this.cricketScore.runs += this.ballState.runsThisBall;
+        this.cricketScore.balls++;
+
+        // Simplified and corrected overs calculation
+        const completedOvers = Math.floor(this.cricketScore.balls / 6);
+        const ballsInCurrentOver = this.cricketScore.balls % 6;
+        this.cricketScore.overs = completedOvers + (ballsInCurrentOver / 10.0);
+       
+        console.log(`🔍 After adding runs - New total: ${this.cricketScore.runs} runs (added ${this.ballState.runsThisBall})`);
+        
+        // Update score display
+        this.updateCricketScore();
+        
+        // Show ball completion summary
+        this.showBallSummary(this.ballState.runsThisBall, this.ballState.ballType);
+        
+        // Reset players for the next ball
+        setTimeout(() => {
+            this.resetPlayersForNextBall();
+        }, 2000);
+        
+        console.log(`✅ Ball completed: ${this.ballState.runsThisBall} runs (${this.ballState.ballType})`);
+    }
+
+    // Show ball completion summary
+    showBallSummary(runs, ballType) {
+        const summaryText = runs === 0 ? 'No runs' : 
+                           runs === 1 ? '1 run' : 
+                           `${runs} runs`;
+        
+        const ballTypeText = ballType === 'boundary' ? ' (Boundary!)' : 
+                            ballType === 'fielded' ? ' (Fielded)' : '';
+        
+        // Create summary notification
+        const notification = document.createElement('div');
+        notification.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 20%;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                font-family: Arial, sans-serif;
+                text-align: center;
+                z-index: 1000;
+                font-size: 18px;
+                border: 2px solid #4ecdc4;
+            ">
+                <h3 style="margin: 0 0 10px 0;">Ball Complete</h3>
+                <p style="margin: 0;">${summaryText}${ballTypeText}</p>
+                <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.8;">Total: ${this.cricketScore.runs} runs</p>
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after 3 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 3000);
+    }
+
+    // Reset players to initial positions for next ball
+    resetPlayersForNextBall() {
+        console.log('🔄 Resetting all players for next ball...');
+        
+        // Reset batsman to initial position
+        if (this.character) {
+            this.character.position.set(0, 0, 9);
+            this.character.rotation.set(0, 0, 0);
+            this.character.lookAt(10, 0, 10); // Face bowler
+            this.playCricketPlayerAnimation(this.character, 'standingidle');
+        }
+        
+        // Reset bowler to original position
+        if (this.bowler) {
+            this.bowler.position.set(0, 0, -9); // Bowler's end
+            this.bowler.rotation.set(0, 0, 0);
+            this.bowler.lookAt(0, 0, 10); // Face batsman
+            this.playCricketPlayerAnimation(this.bowler, 'standingidle');
+            
+            // Reset bowler catch zone position
+            if (this.bowlerReceivingSystem.catchZone) {
+                this.bowlerReceivingSystem.catchZone.position.copy(this.bowler.position);
+                this.bowlerReceivingSystem.catchZone.position.y += 1.5;
+            }
+        }
+        
+        // Reset ball to initial position
+        if (this.cricketBall) {
+            this.cricketBall.position.set(0, 0.035, 0);
+            this.ballPhysics.velocity.set(0, 0, 0);
+            this.ballPhysics.isMoving = false;
+        }
+        
+        // Clear ball trail completely
+        this.clearBallTrail();
+        
+        // Reset fielders to original positions
+        if (this.fielders) {
+            this.fielders.forEach(fielder => {
+                const originalPos = this.fieldingSystem.fielderOriginalPositions.get(fielder.userData.description);
+                if (originalPos) {
+                    fielder.position.set(originalPos.x, originalPos.y, originalPos.z);
+                    fielder.rotation.set(0, 0, 0);
+                    fielder.lookAt(0, 0, 5); // Face batsman
+                    this.playCricketPlayerAnimation(fielder, 'standingidle');
+                }
+            });
+        }
+        
+        // Reset ball state completely
+        this.ballState.isActive = false;
+        this.ballState.isComplete = false;
+        this.ballState.runsThisBall = 0;
+        this.ballState.ballType = 'normal';
+        this.ballState.completionReason = null;
+        
+        // Reset bowler receiving system
+        this.bowlerReceivingSystem.isReceivingThrow = false;
+        
+        console.log('🔄 Players reset for next ball');
+    }
+
+    handleBoundaryScoring() {
+        if (this.cricketScore.boundaryAwarded) return;
+
+        const ballDistance = Math.sqrt(
+            this.cricketBall.position.x ** 2 + 
+            this.cricketBall.position.z ** 2
+        );
+        
+        const boundaryDistance = this.FIELD_RADIUS - 2;
+        
+        if (ballDistance > boundaryDistance) {
+            let boundaryRuns = 0;
+            let boundaryType = '';
+            
+            if (this.cricketScore.ballHasBounced) {
+                boundaryRuns = 4;
+                boundaryType = 'FOUR';
+            } else {
+                boundaryRuns = 6;
+                boundaryType = 'SIX';
+            }
+
+            this.cricketScore.boundaryAwarded = true; 
+            
+            this.ballState.runsThisBall = boundaryRuns;
+            this.ballState.ballType = 'boundary';
+            this.ballState.completionReason = 'boundary';
+            
+            console.log(`🎯 ${boundaryType}! ${boundaryRuns} runs scored`);
+            
+            this.showBoundaryNotification(boundaryType, boundaryRuns);
+            
+            this.fieldingSystem.ballIsHit = false;
+            this.fieldingSystem.chasingFielder = null;
+            this.runningSystem.isRunning = false; 
+            
+            if (this.ballState.isActive && !this.ballState.isComplete) {
+                setTimeout(() => {
+                    this.completeBall();
+                }, 2000);
+            }
+        }
+    }
+
+    checkBallBounce() {
+        if (this.cricketBall.position.y <= 0.1 && !this.cricketScore.ballHasBounced) {
+            this.cricketScore.ballHasBounced = true;
+            console.log('🏐 Ball bounced - will be 4 runs if boundary crossed');
+        }
+    }
+
+    showBoundaryNotification(type, runs) {
+        // Create temporary notification element
+        const notification = document.createElement('div');
+        notification.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: linear-gradient(135deg, #ff6b6b, #4ecdc4);
+                color: white;
+                padding: 30px;
+                border-radius: 15px;
+                font-family: Arial, sans-serif;
+                text-align: center;
+                z-index: 1000;
+                font-size: 24px;
+                font-weight: bold;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            ">
+                <h2 style="margin: 0 0 10px 0;">${type}!</h2>
+                <p style="margin: 0;">+${runs} runs</p>
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after 3 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 3000);
+    }
+
+    resetBallTracking() {
+        this.cricketScore.ballHasBounced = false;
+        this.cricketScore.boundaryAwarded = false;
     }
 
     // Batting control methods (updated to use new shot system)
@@ -2469,6 +2836,12 @@ class CricketGame {
 
     // Running between wickets system
     startRun() {
+        // PREVENT running if a boundary has been awarded.
+        if (this.cricketScore.boundaryAwarded) {
+            console.log('❌ Cannot run - a boundary has been scored!');
+            return false;
+        }
+
         // Only allow running if not already running and not in middle of swing
         if (this.runningSystem.isRunning || this.batSwing.isSwinging) {
             console.log('❌ Cannot start run - already running or swinging');
@@ -2522,6 +2895,9 @@ class CricketGame {
         
         // Check if reached the end
         if (this.runningSystem.runProgress >= 1.0) {
+            // Stop running immediately to prevent multiple calls
+            this.runningSystem.isRunning = false;
+            this.runningSystem.runProgress = 1.0; // Clamp to exactly 1
             this.completeRun();
             return;
         }
@@ -2554,6 +2930,9 @@ class CricketGame {
         this.runningSystem.currentEnd = this.runningSystem.targetEnd;
         this.runningSystem.runProgress = 0;
         this.runningSystem.runsCompleted++;
+        
+        // Don't update score here - wait for ball completion
+        console.log(`🏃‍♂️ Run ${this.runningSystem.runsCompleted} completed!`);
         
         // Start turning animation
         this.runningSystem.runState = 'turning';
@@ -2727,10 +3106,111 @@ class CricketGame {
             this.cricketCharacters.push(character);
             this.scene.add(character);
             
-            console.log('✅ Bowler loaded and positioned');
+            // Store bowler's original position
+            this.bowlerReceivingSystem.originalPosition = character.position.clone();
+            
+            // Create invisible catch zone around bowler
+            this.createBowlerCatchZone();
+            
+            console.log('✅ Bowler loaded and positioned with catch zone');
         }, undefined, (error) => {
             console.log('❌ Bowler loading failed:', error);
         });
+    }
+
+    createBowlerCatchZone() {
+        if (!this.bowler) return;
+        
+        // Create invisible sphere geometry for catch zone
+        const catchZoneGeometry = new THREE.SphereGeometry(this.bowlerReceivingSystem.catchZoneRadius, 8, 6);
+        const catchZoneMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x00ff00, 
+            transparent: true, 
+            opacity: 0.0, // Completely invisible
+            wireframe: false 
+        });
+        
+        this.bowlerReceivingSystem.catchZone = new THREE.Mesh(catchZoneGeometry, catchZoneMaterial);
+        this.bowlerReceivingSystem.catchZone.position.copy(this.bowler.position);
+        this.bowlerReceivingSystem.catchZone.position.y += 1.5; // Chest height
+        
+        // Add to scene but make it invisible
+        this.scene.add(this.bowlerReceivingSystem.catchZone);
+        
+    }
+
+    prepareBowlerForIncomingThrow() {
+        if (!this.bowler || !this.bowlerReceivingSystem.catchZone) return;
+        
+        // Set bowler to receiving state
+        this.bowlerReceivingSystem.isReceivingThrow = true;
+        
+        // Load ready animation for bowler if available
+        this.loadCharacterAnimation(this.bowler, 'regularcatch.fbx', 'bowler');
+        
+        // Play ready-to-receive animation
+        setTimeout(() => {
+            this.playCricketPlayerAnimation(this.bowler, 'regularcatch');
+        }, 200);
+        
+    }
+
+    checkBowlerCatchZone() {
+        // Only check if bowler is ready to receive and ball is moving
+        if (!this.bowlerReceivingSystem.isReceivingThrow || 
+            !this.ballPhysics.isMoving || 
+            !this.bowlerReceivingSystem.catchZone || 
+            !this.cricketBall) {
+            return;
+        }
+        
+        // Calculate distance between ball and bowler catch zone center
+        const ballPosition = this.cricketBall.position;
+        const catchZonePosition = this.bowlerReceivingSystem.catchZone.position;
+        const distance = ballPosition.distanceTo(catchZonePosition);
+        
+        // Check if ball is within catch zone
+        if (distance <= this.bowlerReceivingSystem.catchZoneRadius) {
+            this.bowlerCatchBall();
+        }
+    }
+
+    bowlerCatchBall() {
+        if (!this.bowler || !this.cricketBall) return;
+        
+        if (this.cricketScore.boundaryAwarded) {
+            console.log('📝 Ball already went for a boundary. Ignoring bowler catch.');
+            this.ballPhysics.isMoving = false;
+            this.ballPhysics.velocity.set(0, 0, 0);
+            return;
+        }
+        console.log(`✋ Bowler caught ball - ${this.runningSystem.runsCompleted} runs scored`);
+        
+        // Stop ball movement immediately
+        this.ballPhysics.isMoving = false;
+        this.ballPhysics.velocity.set(0, 0, 0);
+        
+        // Position ball in bowler's hands
+        this.cricketBall.position.copy(this.bowler.position);
+        this.cricketBall.position.y += 1.5; // Hand height
+        
+        // Reset bowler receiving state
+        this.bowlerReceivingSystem.isReceivingThrow = false;
+        
+        // Play catch completion animation
+        this.playCricketPlayerAnimation(this.bowler, 'standingidle');
+        
+        // Complete the ball
+        if (this.ballState.isActive) {
+            this.ballState.ballType = 'fielded';
+            this.ballState.completionReason = 'bowler_caught';
+            
+            // Force complete the ball immediately (bowler has priority)
+            this.forceCompleteBall();
+        } else {
+            console.log(`⚠️ Cannot complete ball - Ball not active`);
+        }
+        
     }
 
     loadWicketKeeper() {
@@ -2784,7 +3264,7 @@ class CricketGame {
             this.cricketCharacters.push(character);
             this.scene.add(character);
             
-            console.log(`✅ ${position.description} loaded and positioned at (${position.x}, ${position.z})`);
+            // console.log(`✅ ${position.description} loaded and positioned at (${position.x}, ${position.z})`);
         }, undefined, (error) => {
             console.log(`❌ ${position.description} loading failed:`, error);
         });
@@ -2926,7 +3406,7 @@ class CricketGame {
         
         const checkAndPlay = () => {
             if (character.userData.animations && character.userData.animations.has(animationName)) {
-                console.log(`🎬 Animation ${animationName} is loaded, playing now...`);
+                // console.log(`🎬 Animation ${animationName} is loaded, playing now...`);
                 if (isLoop) {
                     return this.playCricketPlayerAnimation(character, animationName);
                 } else {
@@ -2980,7 +3460,7 @@ class CricketGame {
         character.userData.currentAction = action;
         character.userData.currentAnimationName = animationName;
         
-        console.log(`✅ Playing ${animationName} on ${character.userData.description || 'character'}`);
+        // console.log(`✅ Playing ${animationName} on ${character.userData.description || 'character'}`);
         return true;
     }
 
@@ -3313,6 +3793,9 @@ class CricketGame {
         
         // Update ball physics
         this.updateBallPhysics(deltaTime);
+        
+        // Check if ball enters bowler catch zone
+        this.checkBowlerCatchZone();
         
         // Update ball trail
         if (this.ballPhysics.isMoving) {
@@ -3759,9 +4242,8 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  Regular catch: Ball within 1.5m - uses regularcatch.fbx');
         console.log('  Diving catch: Ball 2-3m away - uses divingcatch.fbx');
         console.log('  Catch success depends on distance, speed, and catch type');
-        console.log('NOTE: Fielding automatically activates when ball is hit!');
     } catch (error) {
         console.error('Error initializing game:', error);
         document.body.innerHTML = '<div style="color: white; text-align: center; padding: 50px;">Error: ' + error.message + '</div>';
     }
-}); 
+});

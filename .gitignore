@@ -1,4 +1,16 @@
 
+
+# 3D Model Files (Large Binary Files)
+*.fbx
+*.glb
+*.gltf
+*.obj
+*.3ds
+*.blend
+
+# Other large assets
+.DS_Store
+
 # Claude Flow generated files
 .claude/settings.local.json
 .mcp.json
@@ -23,14 +35,6 @@ claude-flow
 claude-flow.bat
 claude-flow.ps1
 hive-mind-prompt-*.txt
-
-# 3D Model Files (Large Binary Files)
-*.fbx
-*.glb
-*.gltf
-*.obj
-*.3ds
-*.blend
-
-# Other large assets
-.DS_Store
+.env
+package-lock.json
+package.json

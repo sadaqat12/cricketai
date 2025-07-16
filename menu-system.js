@@ -238,7 +238,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function updateScore(runs, wickets, overs) {
     document.getElementById('runsScore').textContent = runs;
     document.getElementById('wicketsScore').textContent = wickets;
-    document.getElementById('oversScore').textContent = overs.toFixed(1);
+    document.getElementById('oversScore').textContent = overs;
 }
 
 // Export functions for game integration
