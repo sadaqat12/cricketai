@@ -17,36 +17,373 @@
     </script>
 </head>
 <body>
-    <div id="gameContainer">
-        <div id="ui">
-            <h1>Cricket 3D ✨</h1>
-            <div id="controls">
-                <p>🌟 Cosmic Cricket Field 🌟</p>
-                <p>Mouse: Orbit & Zoom | WASD/Arrows: Move Player</p>
-                <p>Space: Change Animation | R: Run Between Wickets</p>
-                <p>S: Slide | T: Reset Running</p>
+    <!-- Main Menu / Lobby -->
+    <div id="mainMenu" class="menu-screen active">
+        <div class="menu-container">
+            <h1 class="game-title">Cricket 3D</h1>
+            <p class="subtitle">🏏 Experience Cricket in the Cosmos ✨</p>
+            
+            <div class="menu-buttons">
+                <button class="menu-btn primary" onclick="showGameModes()">
+                    <span class="btn-icon">▶</span>
+                    <span>Play Game</span>
+                </button>
+                <button class="menu-btn" onclick="showUserGuide()">
+                    <span class="btn-icon">📖</span>
+                    <span>User Guide</span>
+                </button>
+                <button class="menu-btn" onclick="showSettings()">
+                    <span class="btn-icon">⚙</span>
+                    <span>Settings</span>
+                </button>
+                <button class="menu-btn" onclick="showCredits()">
+                    <span class="btn-icon">🏆</span>
+                    <span>Credits</span>
+                </button>
             </div>
         </div>
+    </div>
+
+    <!-- Game Mode Selection -->
+    <div id="gameModeMenu" class="menu-screen">
+        <div class="menu-container">
+            <h2 class="menu-title">Select Game Mode</h2>
+            
+            <div class="game-mode-grid">
+                <div class="game-mode-card" onclick="startSinglePlayer()">
+                    <div class="mode-icon">🎯</div>
+                    <h3>Single Player</h3>
+                    <p>Practice your batting skills against AI bowlers</p>
+                    <div class="mode-features">
+                        <span>• Free Practice</span>
+                        <span>• Target Challenge</span>
+                        <span>• Career Mode</span>
+                    </div>
+                </div>
+                
+                <div class="game-mode-card" onclick="showMultiplayerOptions()">
+                    <div class="mode-icon">🌐</div>
+                    <h3>Multiplayer</h3>
+                    <p>Compete with players around the world</p>
+                    <div class="mode-features">
+                        <span>• Quick Match</span>
+                        <span>• Tournaments</span>
+                        <span>• Custom Rooms</span>
+                    </div>
+                </div>
+            </div>
+            
+            <button class="menu-btn back-btn" onclick="showMainMenu()">
+                <span class="btn-icon">←</span> Back
+            </button>
+        </div>
+    </div>
+
+    <!-- User Guide -->
+    <div id="userGuide" class="menu-screen">
+        <div class="menu-container guide-container">
+            <h2 class="menu-title">🎮 Game Controls</h2>
+            
+            <div class="guide-sections">
+                <!-- Camera Controls -->
+                <div class="guide-section">
+                    <h3>🎥 Camera Controls</h3>
+                    <div class="control-list">
+                        <div class="control-item">
+                            <span class="control-key">Mouse Drag</span>
+                            <span class="control-desc">Orbit camera around field</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">Mouse Wheel</span>
+                            <span class="control-desc">Zoom in/out</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">Right Click + Drag</span>
+                            <span class="control-desc">Pan camera</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Batting Controls -->
+                <div class="guide-section">
+                    <h3>🏏 Batting Controls</h3>
+                    <div class="control-list">
+                        <div class="control-item">
+                            <span class="control-key">Q</span>
+                            <span class="control-desc">Defensive Block</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">W</span>
+                            <span class="control-desc">Straight Drive</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">E</span>
+                            <span class="control-desc">Cut Shot (Off-side)</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">R</span>
+                            <span class="control-desc">Pull Shot (Leg-side)</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">T</span>
+                            <span class="control-desc">Lofted Shot</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced Shots -->
+                <div class="guide-section">
+                    <h3>⚡ Advanced Shots</h3>
+                    <div class="control-grid">
+                        <div class="control-category">
+                            <h4>Off-side (ASDF)</h4>
+                            <div class="control-item">
+                                <span class="control-key">A</span>
+                                <span class="control-desc">Cover Drive</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">S</span>
+                                <span class="control-desc">Square Cut</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">D</span>
+                                <span class="control-desc">Upper Cut</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">F</span>
+                                <span class="control-desc">Late Cut</span>
+                            </div>
+                        </div>
+                        
+                        <div class="control-category">
+                            <h4>Leg-side (ZXCV)</h4>
+                            <div class="control-item">
+                                <span class="control-key">Z</span>
+                                <span class="control-desc">On Drive</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">X</span>
+                                <span class="control-desc">Hook Shot</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">C</span>
+                                <span class="control-desc">Leg Glance</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">V</span>
+                                <span class="control-desc">Reverse Sweep</span>
+                            </div>
+                        </div>
+                        
+                        <div class="control-category">
+                            <h4>Power Shots</h4>
+                            <div class="control-item">
+                                <span class="control-key">G</span>
+                                <span class="control-desc">Slog</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">B</span>
+                                <span class="control-desc">Helicopter Shot</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">-</span>
+                                <span class="control-desc">Light Tap</span>
+                            </div>
+                            <div class="control-item">
+                                <span class="control-key">=</span>
+                                <span class="control-desc">Power Shot</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Running Controls -->
+                <div class="guide-section">
+                    <h3>🏃 Running & Movement</h3>
+                    <div class="control-list">
+                        <div class="control-item">
+                            <span class="control-key">WASD / Arrows</span>
+                            <span class="control-desc">Move Character</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">R</span>
+                            <span class="control-desc">Run Between Wickets</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">S</span>
+                            <span class="control-desc">Slide</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">T</span>
+                            <span class="control-desc">Reset Running</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">Space</span>
+                            <span class="control-desc">Change Animation</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bowling Controls -->
+                <div class="guide-section">
+                    <h3>🎳 Bowling (Practice)</h3>
+                    <div class="control-list">
+                        <div class="control-item">
+                            <span class="control-key">6</span>
+                            <span class="control-desc">Bowl Straight</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">7</span>
+                            <span class="control-desc">Bowl to Left</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">8</span>
+                            <span class="control-desc">Bowl to Right</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">9</span>
+                            <span class="control-desc">Bowl Bouncer</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <button class="menu-btn back-btn" onclick="showMainMenu()">
+                <span class="btn-icon">←</span> Back to Menu
+            </button>
+        </div>
+    </div>
+
+    <!-- Settings Menu -->
+    <div id="settingsMenu" class="menu-screen">
+        <div class="menu-container">
+            <h2 class="menu-title">⚙️ Settings</h2>
+            
+            <div class="settings-group">
+                <h3>Graphics</h3>
+                <div class="setting-item">
+                    <label>Quality</label>
+                    <select class="setting-control">
+                        <option>Low</option>
+                        <option selected>Medium</option>
+                        <option>High</option>
+                        <option>Ultra</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label>Shadows</label>
+                    <input type="checkbox" checked class="setting-control">
+                </div>
+                <div class="setting-item">
+                    <label>Ball Trail</label>
+                    <input type="checkbox" checked class="setting-control">
+                </div>
+            </div>
+            
+            <div class="settings-group">
+                <h3>Audio</h3>
+                <div class="setting-item">
+                    <label>Master Volume</label>
+                    <input type="range" min="0" max="100" value="80" class="setting-control">
+                </div>
+                <div class="setting-item">
+                    <label>Sound Effects</label>
+                    <input type="range" min="0" max="100" value="100" class="setting-control">
+                </div>
+            </div>
+            
+            <button class="menu-btn back-btn" onclick="showMainMenu()">
+                <span class="btn-icon">←</span> Back
+            </button>
+        </div>
+    </div>
+
+    <!-- Credits -->
+    <div id="creditsMenu" class="menu-screen">
+        <div class="menu-container">
+            <h2 class="menu-title">🏆 Credits</h2>
+            
+            <div class="credits-content">
+                <div class="credit-section">
+                    <h3>Cricket 3D</h3>
+                    <p>A Three.js Cricket Simulation</p>
+                </div>
+                
+                <div class="credit-section">
+                    <h4>Built with</h4>
+                    <p>Three.js • WebGL • JavaScript</p>
+                </div>
+                
+                <div class="credit-section">
+                    <h4>Features</h4>
+                    <p>Realistic Physics • Intelligent AI • 20+ Cricket Shots</p>
+                    <p>Dynamic Fielding • Catching System • Authentic Cricket Mechanics</p>
+                </div>
+            </div>
+            
+            <button class="menu-btn back-btn" onclick="showMainMenu()">
+                <span class="btn-icon">←</span> Back
+            </button>
+        </div>
+    </div>
+
+    <!-- Game Container -->
+    <div id="gameContainer" style="display: none;">
+        <!-- In-Game UI -->
+        <div id="inGameUI" class="in-game-ui">
+            <button class="pause-btn" onclick="togglePauseMenu()">
+                <span class="btn-icon">☰</span>
+            </button>
+            
+            <div class="score-display">
+                <div class="score-item">
+                    <span class="score-label">Runs</span>
+                    <span class="score-value" id="runsScore">0</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Wickets</span>
+                    <span class="score-value" id="wicketsScore">0</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Overs</span>
+                    <span class="score-value" id="oversScore">0.0</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Pause Menu -->
+        <div id="pauseMenu" class="pause-menu" style="display: none;">
+            <div class="pause-content">
+                <h2>Game Paused</h2>
+                <button class="menu-btn" onclick="resumeGame()">
+                    <span class="btn-icon">▶</span> Resume
+                </button>
+                <button class="menu-btn" onclick="showUserGuideInGame()">
+                    <span class="btn-icon">📖</span> Controls
+                </button>
+                <button class="menu-btn" onclick="showSettingsInGame()">
+                    <span class="btn-icon">⚙️</span> Settings
+                </button>
+                <button class="menu-btn" onclick="quitToMenu()">
+                    <span class="btn-icon">🏠</span> Main Menu
+                </button>
+            </div>
+        </div>
+        
         <canvas id="gameCanvas"></canvas>
     </div>
 
-    <script>
-        // Simple initialization - wait for DOM then start
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('🎮 DOM loaded, starting Cricket 3D...');
-            
-            // Add some visual feedback
-            const canvas = document.getElementById('gameCanvas');
-            if (canvas) {
-                canvas.style.background = 'linear-gradient(135deg, #000033 0%, #000066 100%)';
-                console.log('✅ Canvas element found');
-            } else {
-                console.error('❌ Canvas element not found!');
-            }
-        });
-    </script>
-    
-    <!-- Main game script as ES6 module -->
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen" style="display: none;">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <h2>Loading Cricket 3D...</h2>
+            <p class="loading-text">Preparing the cosmic cricket field</p>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="menu-system.js"></script>
     <script type="module" src="cricket-game.js"></script>
 </body>
 </html> 

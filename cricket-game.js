@@ -11,6 +11,11 @@ class CricketGame {
         this.renderer = null;
         this.controls = null;
         
+        // Game state
+        this.isInitialized = false;
+        this.isPaused = false;
+        this.animationId = null;
+        
         // Cricket field dimensions (in meters)
         this.FIELD_RADIUS = 70; // Typical cricket field radius
         this.PITCH_LENGTH = 20.12; // 22 yards in meters
@@ -160,7 +165,7 @@ class CricketGame {
             'leftturn.fbx'
         ];
         
-        this.init();
+        // Don't initialize immediately - wait for menu system to call start()
     }
 
     init() {
@@ -224,11 +229,95 @@ class CricketGame {
             console.log('Starting animation loop...');
             this.animate();
             
+            this.isInitialized = true;
             console.log('✅ Cricket Game initialization complete!');
         } catch (error) {
             console.error('❌ Error during game initialization:', error);
             throw error;
         }
+    }
+
+    // New methods for menu integration
+    start() {
+        if (!this.isInitialized) {
+            this.init();
+        } else {
+            // Resume if already initialized
+            this.resume();
+        }
+    }
+
+    pause() {
+        this.isPaused = true;
+        this.clock.stop();
+        console.log('🎮 Game paused');
+    }
+
+    resume() {
+        this.isPaused = false;
+        this.clock.start();
+        console.log('🎮 Game resumed');
+    }
+
+    stop() {
+        this.isPaused = true;
+        this.clock.stop();
+        
+        // Cancel animation frame
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
+        
+        // Reset game state
+        this.resetFieldingSystem();
+        this.resetCatchingSystem();
+        this.resetRunningSystem();
+        
+        console.log('🎮 Game stopped');
+    }
+
+    // Settings integration
+    setGraphicsQuality(quality) {
+        if (!this.renderer) return;
+        
+        switch (quality) {
+            case 'low':
+                this.renderer.shadowMap.enabled = false;
+                this.renderer.setPixelRatio(1);
+                break;
+            case 'medium':
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFShadowMap;
+                this.renderer.setPixelRatio(window.devicePixelRatio * 0.75);
+                break;
+            case 'high':
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                this.renderer.setPixelRatio(window.devicePixelRatio);
+                break;
+            case 'ultra':
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                this.renderer.setPixelRatio(window.devicePixelRatio * 1.5);
+                break;
+        }
+        console.log(`🎮 Graphics quality set to: ${quality}`);
+    }
+
+    setShadowsEnabled(enabled) {
+        if (!this.renderer) return;
+        
+        this.renderer.shadowMap.enabled = enabled;
+        console.log(`🎮 Shadows ${enabled ? 'enabled' : 'disabled'}`);
+    }
+
+    setBallTrailEnabled(enabled) {
+        this.ballTrail.enabled = enabled;
+        if (!enabled) {
+            this.clearBallTrail();
+        }
+        console.log(`🎮 Ball trail ${enabled ? 'enabled' : 'disabled'}`);
     }
 
     createScene() {
@@ -684,43 +773,6 @@ class CricketGame {
             console.error('❌ Error loading character:', error);
         });
     }
-
-
-
-
-        // // Check if FBXLoader is available
-        // if (typeof THREE.FBXLoader === 'undefined') {
-        //     console.error('❌ FBXLoader not loaded!');
-        //     this.createSimpleCharacter();
-        //     return;
-        // }
-        
-        // const loader = new THREE.FBXLoader();
-        
-        // // Load the real FBX file
-        // console.log('🔄 Attempting to load FBX character from character.fbx...');
-        
-        // loader.load('character.fbx', (characterFbx) => {
-        //     console.log('✅ Real FBX Character model loaded successfully!');
-        //     console.log('FBX has', characterFbx.animations?.length || 0, 'animations');
-        //     console.log('FBX children:', characterFbx.children.length);
-        //     console.log('🎯 Using actual FBX model from file!');
-            
-        //     this.setupRealCharacter(characterFbx);
-            
-        //     // Load additional running animation
-        //     this.loadCharacterAnimation();
-        // }, (progress) => {
-        //     const percent = Math.round((progress.loaded / progress.total) * 100);
-        //     if (percent % 25 === 0) { // Log every 25%
-        //         console.log(`Loading FBX: ${percent}%`);
-        //     }
-        // }, (error) => {
-        //     console.log('❌ FBX loading failed, using fallback character');
-        //     console.log('Error details:', error);
-        //     this.createSimpleCharacter();
-        // });
-    //}
 
     setupRealCharacter(characterModel) {
         this.character = characterModel;
@@ -3058,6 +3110,9 @@ class CricketGame {
 
         // Add keyboard controls for character demonstration
         document.addEventListener('keydown', (event) => {
+            // Don't process game keys if paused
+            if (this.isPaused) return;
+            
             if (!this.character) return;
             
             const moveSpeed = 1;
@@ -3233,7 +3288,10 @@ class CricketGame {
     }
 
     animate() {
-        requestAnimationFrame(() => this.animate());
+        this.animationId = requestAnimationFrame(() => this.animate());
+        
+        // Don't update if paused
+        if (this.isPaused) return;
         
         // Get delta time for smooth animations
         const deltaTime = this.clock.getDelta();
@@ -3327,6 +3385,17 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Make game instance globally accessible for debugging
         window.cricketGame = game;
+        
+        // Expose game control functions for menu system
+        window.startCricketGame = () => game.start();
+        window.pauseCricketGame = () => game.pause();
+        window.resumeCricketGame = () => game.resume();
+        window.stopCricketGame = () => game.stop();
+        
+        // Expose settings functions
+        window.setGraphicsQuality = (quality) => game.setGraphicsQuality(quality);
+        window.setShadowsEnabled = (enabled) => game.setShadowsEnabled(enabled);
+        window.setBallTrailEnabled = (enabled) => game.setBallTrailEnabled(enabled);
         
         // Expose animation controls to console
         window.playBowlerAnimation = (anim) => game.playBowlerAnimation(anim);
@@ -3630,42 +3699,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         
         console.log('Cricket 3D Game initialized successfully!');
-        console.log('Camera: Mouse to orbit and zoom');
-        console.log('Character: WASD/Arrow keys to move, Space to change animation');
-        console.log('Cricket Animations:');
-        console.log('  1: Bowler regular catch');
-        console.log('  2: Keeper diving catch');
-        console.log('  3: All fielders throw');
-        console.log('  4: Reset all to idle');
-        console.log('Ball Physics:');
-        console.log('  N: Bowl straight');
-        console.log('  M: Bowl to left');
-        console.log('  ,: Bowl to right');
-        console.log('  .: Bowl bouncer');
-        console.log('Basic Batting Controls (QWERT):');
-        console.log('  Q: Defensive shot');
-        console.log('  W: Straight drive');
-        console.log('  E: Cut shot (off side)');
-        console.log('  R: Pull shot (leg side)');
-        console.log('  T: Lofted shot');
-        console.log('Advanced Off-Side Shots (ASDF):');
-        console.log('  A: Cover drive');
-        console.log('  S: Square cut');
-        console.log('  D: Upper cut');
-        console.log('  F: Late cut');
-        console.log('Advanced Leg-Side Shots (ZXCV):');
-        console.log('  Z: On drive');
-        console.log('  X: Hook shot');
-        console.log('  C: Leg glance');
-        console.log('  V: Reverse sweep');
-        console.log('Aggressive Shots:');
-        console.log('  G: Slog');
-        console.log('  B: Helicopter shot');
-        console.log('Power Variations:');
-        console.log('  -: Light tap');
-        console.log('  =: Power shot');
-        console.log('Other:');
-        console.log('  H: Hitting animation (testing)');
+        console.log('Menu System integrated - Game ready to start.');
         console.log('Console commands available:');
         console.log('  playBowlerAnimation("animationName")');
         console.log('  playKeeperAnimation("animationName")');
