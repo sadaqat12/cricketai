@@ -92,6 +92,32 @@ A realistic 3D cricket game built with Three.js, featuring authentic cricket fie
 - **Safari**: Full support with all features
 - **Edge**: Full support with all features
 
+## 📁 Repository Setup
+
+### GitHub Repository
+- **Repository**: [https://github.com/sadaqat12/cricketai.git](https://github.com/sadaqat12/cricketai.git)
+- **Branch**: `main`
+- **Files Included**: Core game files, documentation, and configuration
+- **Files Excluded**: Large 3D model files (*.fbx, *.glb) are excluded from the repository
+
+### Model Files (Not in Repository)
+The following large binary files are excluded via `.gitignore`:
+- `*.fbx` - Character animations and models
+- `*.glb` - 3D assets like cricket ball and bat
+- `*.gltf` - Additional 3D model formats
+- `*.obj`, `*.3ds`, `*.blend` - Other 3D formats
+
+**Note**: If you clone this repository, you'll need to add your own 3D model files to the project directory for full functionality.
+
+### Included Files
+- `cricket-game.js` - Main game logic and Three.js implementation
+- `index.html` - Game entry point
+- `style.css` - Game styling and UI
+- `three.min.js` - Three.js library
+- `OrbitControls.js` - Camera controls
+- `fflate.min.js` - Compression library
+- Documentation and configuration files
+
 ## 📋 Next Development Steps
 
 ### Newly Added Features ✨
