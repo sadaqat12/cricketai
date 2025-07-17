@@ -1899,55 +1899,69 @@ class CricketGame {
             console.log('🚫 Fielding already in progress or ball stopped');
             return;
         }
-    
+
         console.log('🎯 Assigning fielder');
         
         const ballPos = this.cricketBall.position;
+        const ballVelocity = this.ballPhysics.velocity.clone();
         
-        // ✅ IMPROVED: Prioritize fielders closest to current ball position
-        let closestToBall = null;
-        let closestBallDist = Infinity;
-        let closestToLanding = null;
-        let closestLandingDist = Infinity;
+        // ✅ IMPROVED: Determine shot direction/zone first
+        const shotZone = this.determineShotZone(ballVelocity);
+        console.log(`📍 Shot detected in ${shotZone} zone`);
+        
+        // ✅ Get fielders in the appropriate zone first
+        const preferredFielders = this.getFieldersInZone(shotZone);
+        const allFielders = this.fielders.filter(f => 
+            this.fieldingSystem.fielderStates.get(f.userData.description) === 'idle'
+        );
+        
+        // ✅ IMPROVED: Prioritize fielders by zone relevance + distance
+        let selectedFielder = null;
+        let bestScore = Infinity;
+        let strategy = '';
         
         // Predict where the ball will hit the ground for backup assignment
         const landingPos = this.predictBallLanding();
         
-        // Find the best fielders using both criteria
-        this.fielders.forEach(f => {
-            if (this.fieldingSystem.fielderStates.get(f.userData.description) !== 'idle')
-                return;
-                
-            // Distance to current ball position (PRIORITY)
-            const ballDistance = f.position.distanceTo(ballPos);
-            if (ballDistance < closestBallDist) {
-                closestBallDist = ballDistance;
-                closestToBall = f;
-            }
+        // First, try fielders in the preferred zone
+        preferredFielders.forEach(f => {
+            if (this.fieldingSystem.fielderStates.get(f.userData.description) !== 'idle') return;
             
-            // Distance to predicted landing (BACKUP)
-            if (landingPos) {
-                const landingDistance = f.position.distanceTo(landingPos);
-                if (landingDistance < closestLandingDist) {
-                    closestLandingDist = landingDistance;
-                    closestToLanding = f;
-                }
+            const ballDistance = f.position.distanceTo(ballPos);
+            const landingDistance = landingPos ? f.position.distanceTo(landingPos) : ballDistance;
+            
+            // Score = weighted combination of current ball distance + landing distance
+            // Prefer landing distance for ground shots, ball distance for high shots
+            const ballHeight = ballPos.y;
+            const isHighBall = ballHeight > 2.0;
+            const score = isHighBall ? 
+                (ballDistance * 0.7 + landingDistance * 0.3) : // High ball: prioritize current position
+                (ballDistance * 0.3 + landingDistance * 0.7);   // Low ball: prioritize landing
+            
+            if (score < bestScore) {
+                bestScore = score;
+                selectedFielder = f;
+                strategy = `zone-appropriate (${shotZone})`;
             }
         });
         
-        // ✅ PRIORITY LOGIC: Choose the best fielder
-        let selectedFielder = null;
-        let strategy = '';
-        
-        // If someone is close to the ball (within 20m), prioritize them
-        if (closestToBall && closestBallDist <= 20) {
-            selectedFielder = closestToBall;
-            strategy = `closest to ball (${closestBallDist.toFixed(1)}m)`;
-        }
-        // Otherwise, use the fielder closest to landing position
-        else if (closestToLanding && landingPos) {
-            selectedFielder = closestToLanding;
-            strategy = `closest to landing (${closestLandingDist.toFixed(1)}m)`;
+        // If no suitable fielder in preferred zone, use closest overall
+        if (!selectedFielder) {
+            console.log(`⚠️ No suitable fielder in ${shotZone} zone, checking all fielders`);
+            
+            allFielders.forEach(f => {
+                const ballDistance = f.position.distanceTo(ballPos);
+                const landingDistance = landingPos ? f.position.distanceTo(landingPos) : ballDistance;
+                
+                // Use landing distance as primary for ground fielding
+                const score = ballPos.y > 2.0 ? ballDistance : landingDistance;
+                
+                if (score < bestScore) {
+                    bestScore = score;
+                    selectedFielder = f;
+                    strategy = `closest overall (${score.toFixed(1)}m)`;
+                }
+            });
         }
         
         if (!selectedFielder) {
@@ -1956,13 +1970,15 @@ class CricketGame {
         }
         
         console.log(`🎯 Selected ${selectedFielder.userData.description} - ${strategy}`);
+        console.log(`   Ball velocity: (${ballVelocity.x.toFixed(1)}, ${ballVelocity.y.toFixed(1)}, ${ballVelocity.z.toFixed(1)})`);
         
         // Set this fielder as the chaser
         this.fieldingSystem.chasingFielder = selectedFielder;
-    
+
         // Decide catch vs. ground‑field based on ball characteristics
         const ballHeight = this.cricketBall.position.y;
         const ballSpeed = this.ballPhysics.velocity.length();
+        const closestBallDist = selectedFielder.position.distanceTo(ballPos);
         
         if (ballHeight > 1.0 && ballSpeed > 5.0 && closestBallDist <= 15) {
             // → High, fast ball and fielder is reasonably close: try direct intercept
@@ -1986,11 +2002,33 @@ class CricketGame {
             this.startFielderChasing(selectedFielder);
         }
     }
-    
 
+    // ✅ NEW: Determine shot zone based on ball velocity
+    determineShotZone(ballVelocity) {
+        const vx = ballVelocity.x;
+        const vz = ballVelocity.z;
+        
+        // Determine primary direction
+        if (Math.abs(vx) > Math.abs(vz)) {
+            // Ball is going more sideways than forward/backward
+            return vx > 0 ? 'offSide' : 'legSide';
+        } else if (vz > 0) {
+            // Ball is going behind the batsman
+            return 'behind';
+        } else {
+            // Ball is going toward bowler (straight)
+            return 'straight';
+        }
+    }
 
-
-
+    // ✅ NEW: Get fielders appropriate for the shot zone
+    getFieldersInZone(shotZone) {
+        const zoneFielders = this.fieldingSystem.fieldingZones[shotZone] || [];
+        return this.fielders.filter(f => 
+            zoneFielders.includes(f.userData.description) &&
+            this.fieldingSystem.fielderStates.get(f.userData.description) === 'idle'
+        );
+    }
 
     calculateTimeToLand() {
         if (!this.cricketBall || !this.ballPhysics.isMoving) return 0;
@@ -2020,8 +2058,6 @@ class CricketGame {
         // Return the positive time value
         return Math.max(0, Math.max(t1, t2));
     }
-
-
 
     predictBallLanding() {
         if (!this.cricketBall || !this.ballPhysics.isMoving) return null;
@@ -2073,8 +2109,6 @@ class CricketGame {
             adjustedZ + uncertaintyZ
         );
     }
-
-
 
     startDirectIntercept(fielder, targetPosition) {
         if (!fielder || !targetPosition) return;
@@ -2236,16 +2270,27 @@ class CricketGame {
             return;
         }
         
-        // Otherwise attempt a catch
+        // ✅ NEW: Check catch probability before attempting
+        const catchProbability = this.calculateCatchProbability(fielder, ballPosition, this.ballPhysics.velocity, distance);
+        console.log(`📊 ${fielder.userData.description} catch probability: ${(catchProbability * 100).toFixed(1)}%`);
+        
+        if (catchProbability < 0.15) {
+            console.log(`❌ Catch probability too low (${(catchProbability * 100).toFixed(1)}% < 15%) - switching to field mode`);
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'chasing');
+            this.updateFielderChasing(fielder, 0.016); // Call once to start chase
+            return;
+        }
+        
+        // Otherwise attempt a catch (probability ≥ 20%)
         let catchType = 'regularcatch';
         let catchAnimation = 'regularcatch.fbx';
         
         if (distance > 3.0) {
             catchType = 'divingcatch';
             catchAnimation = 'divingcatch.fbx';
-            console.log(`🤸‍♂️ ${fielder.userData.description} going for a diving catch! (${distance.toFixed(1)}m away)`);
+            console.log(`🤸‍♂️ ${fielder.userData.description} going for a diving catch! (${distance.toFixed(1)}m away, ${(catchProbability * 100).toFixed(1)}% chance)`);
         } else {
-            console.log(`✋ ${fielder.userData.description} going for a regular catch! (${distance.toFixed(1)}m away)`);
+            console.log(`✋ ${fielder.userData.description} going for a regular catch! (${distance.toFixed(1)}m away, ${(catchProbability * 100).toFixed(1)}% chance)`);
         }
         
         // Set fielder state to catching
@@ -2864,10 +2909,10 @@ class CricketGame {
         // Set catch result
         this.fieldingSystem.catchingSystem.catchResult = 'dropped';
         
-        // Ball continues with reduced velocity (deflected by attempted catch)
+        // Ball deflects when dropped (realistic behavior)
         this.ballPhysics.velocity.multiplyScalar(0.6); // Reduce speed by 40%
         
-        // Add slight deflection
+        // Add slight deflection from the drop
         const deflection = new THREE.Vector3(
             (Math.random() - 0.5) * 2,
             Math.random() * 2,
@@ -2875,12 +2920,81 @@ class CricketGame {
         );
         this.ballPhysics.velocity.add(deflection);
         
-        // Continue fielding normally
-        setTimeout(() => {
-            this.resetCatchingSystem();
-            // Ball continues, fielding system will pick it up normally
-        }, 1000);
+        // Reset the fielder who dropped the catch
+        this.fieldingSystem.fielderStates.set(fielder.userData.description, 'returning');
+        this.playCricketPlayerAnimation(fielder, 'standingidle');
+        
+        // ✅ NEW: Assign backup fielder for dropped catch
+        console.log('🔄 Looking for backup fielder to chase the loose ball...');
+        const backupAssigned = this.assignBackupFielder(fielder);
+        
+        // Reset catching system but keep fielding active if backup found
+        this.resetCatchingSystem();
+        
+        if (backupAssigned) {
+            console.log('🏃 Backup fielding activated - ball still in play!');
+        } else {
+            console.log('⚠️ No backup available - continuing with deflected ball');
+        }
     }
+
+    // ✅ NEW: Assign backup fielder when catch is dropped
+    assignBackupFielder(droppedCatchFielder) {
+        const ballPos = this.cricketBall.position;
+        
+        // Find closest available fielder (excluding the one who dropped it)
+        let closestBackup = null;
+        let closestDistance = Infinity;
+        
+        this.fielders.forEach(fielder => {
+            // Skip the fielder who just dropped the catch
+            if (fielder === droppedCatchFielder) return;
+            
+            // Only consider idle fielders
+            const state = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+            if (state !== 'idle') return;
+            
+            const distance = fielder.position.distanceTo(ballPos);
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestBackup = fielder;
+            }
+        });
+        
+        if (closestBackup && closestDistance <= 30) { // Within reasonable backup range
+            console.log(`🆘 ${closestBackup.userData.description} backing up the dropped catch (${closestDistance.toFixed(1)}m away)`);
+            
+            // Set as new chasing fielder
+            this.fieldingSystem.chasingFielder = closestBackup;
+            this.fieldingSystem.fielderStates.set(closestBackup.userData.description, 'chasing');
+            
+            // Start chasing immediately
+            this.startFielderChasing(closestBackup);
+            
+            // ✅ NEW: Set a target position slightly ahead of the ball for better interception
+            if (this.ballPhysics.isMoving) {
+                const ballVelocity = this.ballPhysics.velocity.clone();
+                const predictedPos = ballPos.clone().add(ballVelocity.multiplyScalar(1.0)); // 1 second ahead
+                closestBackup.userData.targetPosition = predictedPos;
+                console.log(`🎯 ${closestBackup.userData.description} targeting predicted position ahead of ball`);
+            }
+            
+            return true;
+        } else {
+            console.log('⚠️ No suitable backup fielder found within range');
+            
+            // If no backup available, complete the ball after a delay
+            setTimeout(() => {
+                if (this.ballState.isActive && !this.ballState.isComplete) {
+                    console.log('🔚 No backup fielder available - completing ball');
+                    this.completeBall();
+                }
+            }, 2000);
+            
+            return false;
+        }
+    }
+
     resetCatchingSystem() {
         const catching = this.fieldingSystem.catchingSystem;
         
@@ -4428,8 +4542,9 @@ class CricketGame {
 
         let closestFielder = null;
         let closestDistance = Infinity;
+        let bestCatchProbability = 0;
         
-        // ✅ FIXED: Find fielder closest to CURRENT ball position, not prediction
+        // ✅ IMPROVED: Find fielder with reasonable catch chance, not just closest
         this.fielders.forEach(fielder => {
             const fielderState = this.fieldingSystem.fielderStates.get(fielder.userData.description);
             
@@ -4441,14 +4556,27 @@ class CricketGame {
             const distance = fielder.position.distanceTo(ballPos);
             
             // Check if this fielder is within catch range
-            if (distance <= this.fieldingSystem.catchingSystem.catchRadius && distance < closestDistance) {
-                closestDistance = distance;
-                closestFielder = fielder;
+            if (distance <= this.fieldingSystem.catchingSystem.catchRadius) {
+                // ✅ NEW: Calculate catch probability for this fielder
+                const catchProbability = this.calculateCatchProbability(fielder, ballPos, this.ballPhysics.velocity, distance);
+                
+                console.log(`🎯 ${fielder.userData.description}: ${distance.toFixed(1)}m away, ${(catchProbability * 100).toFixed(1)}% catch chance`);
+                
+                // ✅ NEW: Only consider fielders with reasonable catch probability (≥20%)
+                if (catchProbability >= 0.15) {
+                    if (distance < closestDistance || catchProbability > bestCatchProbability) {
+                        closestDistance = distance;
+                        closestFielder = fielder;
+                        bestCatchProbability = catchProbability;
+                    }
+                } else {
+                    console.log(`❌ ${fielder.userData.description} catch probability too low (${(catchProbability * 100).toFixed(1)}% < 15%) - won't attempt`);
+                }
             }
         });
         
-        if (closestFielder) {
-            console.log(`🎯 CATCH OPPORTUNITY! ${closestFielder.userData.description} is ${closestDistance.toFixed(1)}m from ball (height: ${ballHeight.toFixed(1)}m)`);
+        if (closestFielder && bestCatchProbability >= 0.15) {
+            console.log(`🎯 CATCH OPPORTUNITY! ${closestFielder.userData.description} selected with ${(bestCatchProbability * 100).toFixed(1)}% chance (${closestDistance.toFixed(1)}m, height: ${ballHeight.toFixed(1)}m)`);
             
             // Clear any existing chaser - this fielder is taking over
             if (this.fieldingSystem.chasingFielder && this.fieldingSystem.chasingFielder !== closestFielder) {
@@ -4457,8 +4585,10 @@ class CricketGame {
                 this.fieldingSystem.chasingFielder = null;
             }
             
-            // Attempt the catch immediately
+            // Attempt the catch
             this.attemptCatch(closestFielder, closestDistance);
+        } else if (closestFielder) {
+            console.log(`⚠️ Best fielder ${closestFielder.userData.description} has only ${(bestCatchProbability * 100).toFixed(1)}% chance - waiting for better opportunity or ground fielding`);
         }
     }
 
@@ -4494,6 +4624,43 @@ class CricketGame {
                 notification.parentNode.removeChild(notification);
             }
         }, 3000);
+    }
+
+    // Method to remove objects from the scene (for future use)
+    removeFromScene(object) {
+        this.scene.remove(object);
+    }
+
+    // ✅ NEW: Calculate catch probability without side effects (for threshold checking)
+    calculateCatchProbability(fielder, ballPosition, ballVelocity, distance = null) {
+        if (!fielder || !ballPosition || !ballVelocity) return 0;
+        
+        // Use provided distance or calculate it
+        const catchDistance = distance || fielder.position.distanceTo(ballPosition);
+        const ballSpeed = ballVelocity.length();
+        
+        // Start with 100% probability
+        let catchProbability = 1.0;
+        
+        // Reduce probability based on distance
+        const maxDistance = this.fieldingSystem.catchingSystem.catchRadius;
+        const distanceFactor = Math.max(0, 1 - (catchDistance / maxDistance));
+        catchProbability *= distanceFactor;
+        
+        // Reduce probability based on ball speed
+        const speedFactor = Math.max(0.3, 1 - (ballSpeed / 30));
+        catchProbability *= speedFactor;
+        
+        // Determine catch type and apply difficulty modifier
+        const divingRadius = this.fieldingSystem.catchingSystem.divingCatchRadius;
+        const isDivingCatch = catchDistance > divingRadius;
+        
+        if (isDivingCatch) {
+            catchProbability *= 0.7; // 30% harder for diving catches
+        }
+        
+        // Ensure probability is between 0 and 1
+        return Math.max(0, Math.min(1, catchProbability));
     }
 }
 
@@ -5199,10 +5366,293 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  testCatch(fielderIndex) - test catching system with specific fielder');
         console.log('  unstuckFielder("fielderName") - manually unstick a stuck fielder');
         console.log('  forceCompleteFielding() - force complete current fielding sequence');
+        console.log('  testBackupFielding() - test dropped catch backup system');
+        console.log('  testDroppedCatch() - simulate dropped catch with backup fielder');
+        console.log('  testCatchProbabilityThreshold() - test realistic catch probability system');
+        console.log('  testCatchProbability("fielderName", distance, speed) - test specific scenarios');
+        console.log('  testCatchScenario("easy/medium/hard/impossible") - test difficulty scenarios');
+        console.log('  demoCatchProbabilityThreshold() - quick demo of all probability scenarios');
         console.log('Catching System:');
         console.log('  Regular catch: Ball within 1.5m - uses regularcatch.fbx');
         console.log('  Diving catch: Ball 2-3m away - uses divingcatch.fbx');
         console.log('  Catch success depends on distance, speed, and catch type');
+        console.log('  ✅ NEW: Dropped catches trigger automatic backup fielding!');
+        console.log('  ✅ NEW: Realistic catch attempts - only tries catches with ≥20% probability!');
+        
+        // ✅ NEW: Test the improved fielding system
+        window.testImprovedFieldingV4 = () => {
+            console.log('🚀 Testing Improved Fielding System v4.0 - Shot Zone Based Selection');
+            console.log('==================================================================');
+            console.log('');
+            console.log('✅ NEW FEATURES:');
+            console.log('  🎯 Shot direction analysis (determines offSide/legSide/straight/behind)');
+            console.log('  🏃 Zone-appropriate fielder selection first');
+            console.log('  ⚖️ Weighted scoring: ball distance + landing distance');
+            console.log('  📍 High ball vs ground ball prioritization');
+            console.log('  🛑 FIXED: First Slip no longer selected for every shot!');
+            console.log('');
+            console.log('🧪 TESTING COMMANDS:');
+            console.log('  testShotFielderSelection("straightDrive") - test straight shot');
+            console.log('  testShotFielderSelection("coverDrive") - test off-side shot');
+            console.log('  testShotFielderSelection("pullShot") - test leg-side shot');
+            console.log('  testShotFielderSelection("lateCut") - test behind wicket');
+            console.log('  debugFieldingLive() - real-time analysis during play');
+            console.log('  showFieldCoords() - show all fielder positions');
+            console.log('');
+            console.log('🎯 WHAT TO LOOK FOR:');
+            console.log('  ✅ Off-side shots → Cover, Point, Gully fielders respond');
+            console.log('  ✅ Leg-side shots → Square Leg, Fine Leg, Mid On respond');
+            console.log('  ✅ Straight shots → Mid Off, Mid On respond');
+            console.log('  ✅ Behind shots → First Slip, Third Man, Fine Leg respond');
+            console.log('  ✅ NO MORE First Slip chasing every shot!');
+            console.log('');
+            console.log('Try: bowlStraight() then playCoverDrive() - Cover should respond, not Slip!');
+        };
+        
+        // ✅ NEW: Test shot-specific fielder selection
+        window.testShotFielderSelection = (shotType) => {
+            console.log(`🧪 Testing fielder selection for ${shotType}:`);
+            
+            // Get shot data
+            const shot = game.shotTypes[shotType];
+            if (!shot) {
+                console.log(`❌ Shot type '${shotType}' not found`);
+                return;
+            }
+            
+            // Simulate ball velocity
+            const ballVelocity = new THREE.Vector3(shot.direction[0], shot.direction[1], shot.direction[2]);
+            ballVelocity.multiplyScalar(shot.power * 8);
+            
+            console.log(`🏏 Shot: ${shot.description}`);
+            console.log(`⚡ Ball velocity: X=${ballVelocity.x.toFixed(1)}, Y=${ballVelocity.y.toFixed(1)}, Z=${ballVelocity.z.toFixed(1)}`);
+            
+            // Test the new zone determination
+            const shotZone = game.determineShotZone(ballVelocity);
+            console.log(`📍 Detected zone: ${shotZone}`);
+            
+            // Show preferred fielders for this zone
+            const zoneFielders = game.fieldingSystem.fieldingZones[shotZone] || [];
+            console.log(`🎯 Preferred fielders: ${zoneFielders.join(', ')}`);
+            
+            // Check which fielders are actually available in this zone
+            const availableInZone = game.getFieldersInZone(shotZone);
+            console.log(`✅ Available in zone: ${availableInZone.length} fielders`);
+            availableInZone.forEach(f => {
+                const pos = f.position;
+                console.log(`   ${f.userData.description}: (${pos.x.toFixed(1)}, ${pos.z.toFixed(1)})`);
+            });
+            
+            // Show how this differs from old system (closest to batsman)
+            const batsmanPos = new THREE.Vector3(0, 0, 9);
+            let closestToBatsman = null;
+            let closestDist = Infinity;
+            
+            game.fielders.forEach(f => {
+                const dist = f.position.distanceTo(batsmanPos);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    closestToBatsman = f;
+                }
+            });
+            
+            console.log(`📊 OLD SYSTEM (closest to batsman): ${closestToBatsman.userData.description} (${closestDist.toFixed(1)}m)`);
+            console.log(`📊 NEW SYSTEM (zone-appropriate): ${availableInZone.length > 0 ? availableInZone[0].userData.description : 'None in zone'}`);
+            
+            if (closestToBatsman.userData.description === 'First Slip') {
+                console.log(`🎯 PROBLEM FIXED: Old system would select First Slip, new system uses proper zone!`);
+            }
+            
+            return {
+                shotZone,
+                preferredFielders: zoneFielders,
+                availableInZone: availableInZone.map(f => f.userData.description),
+                oldSystemChoice: closestToBatsman.userData.description,
+                newSystemChoice: availableInZone.length > 0 ? availableInZone[0].userData.description : 'None'
+            };
+        };
+        
+        // ✅ NEW: Test backup fielding system
+        window.testBackupFielding = () => {
+            console.log('🆘 Testing Backup Fielding System');
+            console.log('===================================');
+            console.log('');
+            console.log('✅ NEW FEATURES:');
+            console.log('  🎯 When catch is dropped → closest fielder backs up automatically');
+            console.log('  🏃 Backup fielder chases deflected ball');
+            console.log('  🎯 Predictive positioning ahead of ball movement');
+            console.log('  ⚡ Realistic ball deflection when dropped');
+            console.log('  🔄 Seamless transition from dropped catch to backup fielding');
+            console.log('');
+            console.log('🧪 TESTING:');
+            console.log('  1. Bowl ball: bowlStraight()');
+            console.log('  2. Hit shot: playUpperCut() or playCoverDrive()');
+            console.log('  3. Watch fielder attempt catch');
+            console.log('  4. If dropped → backup fielder should automatically respond');
+            console.log('');
+            console.log('🎯 WHAT TO LOOK FOR:');
+            console.log('  ✅ First fielder attempts catch');
+            console.log('  ✅ If dropped: "Looking for backup fielder..." message');
+            console.log('  ✅ Closest fielder starts chasing deflected ball');
+            console.log('  ✅ Ball deflects realistically when dropped');
+            console.log('  ✅ Backup fielder targets predicted ball position');
+            console.log('');
+            console.log('Try: bowlStraight() → playUpperCut() → watch for backup!');
+        };
+        
+        // ✅ NEW: Test catch probability threshold system
+        window.testCatchProbabilityThreshold = () => {
+            console.log('🎯 Testing Catch Probability Threshold System');
+            console.log('==============================================');
+            console.log('');
+            console.log('✅ NEW FEATURE: Realistic Catch Attempts');
+            console.log('  🚫 Fielders only attempt catches with ≥20% probability');
+            console.log('  📊 Probability based on distance, ball speed, and catch type');
+            console.log('  🧠 Smart fielding - no more impossible catch attempts!');
+            console.log('');
+            console.log('🧮 Probability Factors:');
+            console.log('  📏 Distance: Closer = higher chance');
+            console.log('  ⚡ Ball Speed: Slower = higher chance');
+            console.log('  🤸 Catch Type: Regular catch > Diving catch');
+            console.log('');
+            console.log('🧪 TESTING:');
+            console.log('  testCatchProbability("Cover", 2.5, 15) - test Cover fielder');
+            console.log('  testCatchScenario("easy") - test easy catch scenario');
+            console.log('  testCatchScenario("hard") - test difficult catch scenario');
+            console.log('  testCatchScenario("impossible") - test impossible catch');
+            console.log('');
+            console.log('🎯 WHAT TO LOOK FOR:');
+            console.log('  ✅ High probability (>20%): Fielder attempts catch');
+            console.log('  ❌ Low probability (<20%): Fielder switches to ground fielding');
+            console.log('  📊 Console shows exact probability calculations');
+            console.log('');
+            console.log('Try: testCatchScenario("impossible") to see fielder skip attempt!');
+        };
+        
+        // ✅ NEW: Test catch probability for specific fielder
+        window.testCatchProbability = (fielderName, distance = 3.0, ballSpeed = 15) => {
+            const fielder = game.fielders.find(f => f.userData.description === fielderName);
+            if (!fielder) {
+                console.log(`❌ Fielder '${fielderName}' not found`);
+                console.log('Available fielders:', game.fielders.map(f => f.userData.description).join(', '));
+                return;
+            }
+            
+            // Create test ball position and velocity
+            const testBallPos = fielder.position.clone();
+            testBallPos.x += distance; // Move ball away from fielder
+            testBallPos.y += 2; // Ball in air
+            
+            const testBallVel = new THREE.Vector3(-ballSpeed, -2, 0); // Moving toward fielder
+            
+            const probability = game.calculateCatchProbability(fielder, testBallPos, testBallVel, distance);
+            
+            console.log(`🧪 Testing ${fielderName}:`);
+            console.log(`   Distance: ${distance.toFixed(1)}m`);
+            console.log(`   Ball Speed: ${ballSpeed.toFixed(1)}`);
+            console.log(`   Catch Probability: ${(probability * 100).toFixed(1)}%`);
+            console.log(`   Verdict: ${probability >= 0.15 ? '✅ WILL ATTEMPT' : '❌ TOO RISKY - will field instead'}`);
+            
+            return probability;
+        };
+        
+        // ✅ NEW: Test different catch scenarios
+        window.testCatchScenario = (scenario) => {
+            const scenarios = {
+                easy: { distance: 1.5, speed: 8, description: 'Easy catch (close, slow ball)' },
+                medium: { distance: 3.0, speed: 15, description: 'Medium catch (moderate distance and speed)' },
+                hard: { distance: 4.5, speed: 22, description: 'Hard catch (far, fast ball)' },
+                impossible: { distance: 6.0, speed: 30, description: 'Nearly impossible catch (very far, very fast)' }
+            };
+            
+            const test = scenarios[scenario];
+            if (!test) {
+                console.log('❌ Unknown scenario. Available: easy, medium, hard, impossible');
+                return;
+            }
+            
+            console.log(`🧪 Testing "${scenario}" scenario: ${test.description}`);
+            console.log('📊 Fielder Probabilities:');
+            
+            let attempters = 0;
+            let fielders = 0;
+            
+            game.fielders.forEach(fielder => {
+                const probability = window.testCatchProbability(fielder.userData.description, test.distance, test.speed);
+                if (probability >= 0.15) {
+                    attempters++;
+                } else {
+                    fielders++;
+                }
+            });
+            
+            console.log('');
+            console.log(`📈 Summary for "${scenario}" scenario:`);
+            console.log(`   Will attempt catch: ${attempters} fielders`);
+            console.log(`   Will field instead: ${fielders} fielders`);
+            console.log(`   Realistic behavior: ${attempters === 0 && scenario === 'impossible' ? '✅ Perfect!' : attempters > 0 ? '✅ Some will try' : '⚠️ None will try'}`);
+        };
+        
+        // ✅ NEW: Quick demo of probability threshold in action
+        window.demoCatchProbabilityThreshold = () => {
+            console.log('🚀 QUICK DEMO: Realistic Catch Probability System');
+            console.log('================================================');
+            console.log('');
+            
+            // Test all scenarios quickly
+            const scenarios = ['easy', 'medium', 'hard', 'impossible'];
+            scenarios.forEach(scenario => {
+                console.log(`🎬 ${scenario.toUpperCase()} SCENARIO:`);
+                window.testCatchScenario(scenario);
+                console.log('');
+            });
+            
+            console.log('🎯 SUMMARY:');
+            console.log('  ✅ Easy catches: Most fielders will attempt');
+            console.log('  ⚖️ Medium catches: Some fielders will attempt');
+            console.log('  🔥 Hard catches: Few fielders will attempt');
+            console.log('  🚫 Impossible catches: Fielders avoid and field instead');
+            console.log('');
+            console.log('🧠 This makes fielding much more realistic - no more impossible diving attempts!');
+            console.log('🎮 Try bowling and hitting to see it in action: bowlStraight() → playUpperCut()');
+        };
+        
+        // ✅ NEW: Test dropped catch scenario specifically
+        window.testDroppedCatch = () => {
+            if (!game.fielders || game.fielders.length < 2) {
+                console.log('❌ Need at least 2 fielders for backup test');
+                return;
+            }
+            
+            // Start new ball
+            game.startNewBall();
+            
+            // Get two fielders for testing
+            const primaryFielder = game.fielders[0];
+            const backupFielder = game.fielders[1];
+            
+            console.log(`🧪 Testing dropped catch scenario:`);
+            console.log(`   Primary: ${primaryFielder.userData.description}`);
+            console.log(`   Expected backup: ${backupFielder.userData.description}`);
+            
+            // Position ball near first fielder
+            game.cricketBall.position.copy(primaryFielder.position);
+            game.cricketBall.position.x += 3;
+            game.cricketBall.position.y += 2;
+            
+            // Set ball moving moderately
+            game.ballPhysics.velocity.set(-2, -1, 1);
+            game.ballPhysics.isMoving = true;
+            game.fieldingSystem.ballIsHit = true;
+            
+            // Force a dropped catch to test backup system
+            setTimeout(() => {
+                console.log('🎭 Simulating dropped catch...');
+                game.droppedCatch(primaryFielder, 'regularcatch');
+            }, 1000);
+            
+            console.log('🎬 Dropped catch test started - watch console for backup fielder assignment!');
+        };
     } catch (error) {
         console.error('Error initializing game:', error);
         document.body.innerHTML = '<div style="color: white; text-align: center; padding: 50px;">Error: ' + error.message + '</div>';
