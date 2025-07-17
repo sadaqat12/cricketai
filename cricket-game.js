@@ -2458,15 +2458,21 @@ class CricketGame {
         this.cricketBall.position.copy(fielder.position);
         this.cricketBall.position.y += 1.5; // Hand height
         
-        // Ball is now fielded - complete with running runs
+        // Ball is now fielded - but DON'T complete yet if batsman is running (potential run-out)
         if (this.ballState.isActive && !this.ballState.isComplete) {
             this.ballState.ballType = 'fielded';
             this.ballState.completionReason = 'fielded';
             
-            // Complete the ball immediately when fielded
-            setTimeout(() => {
-                this.completeBall();
-            }, 1000);
+            // Only complete immediately if batsman is NOT running (no run-out possible)
+            if (!this.runningSystem.isRunning) {
+                console.log('🔚 Batsman not running - completing ball immediately');
+                setTimeout(() => {
+                    this.completeBall();
+                }, 1000);
+            } else {
+                console.log('🏃‍♂️ Batsman still running - delaying ball completion for potential run-out');
+                // Ball completion will happen in bowlerCatchBall() after run-out check
+            }
         }
         
         // Load and play throw animation
@@ -2806,14 +2812,21 @@ class CricketGame {
         // Clear ball trail for clean visual
         this.clearBallTrail();
         
-        // Complete the ball immediately since it's been fielded
+        // Complete the ball immediately since it's been fielded - but check for running batsman
         if (this.ballState.isActive && !this.ballState.isComplete) {
             this.ballState.ballType = 'fielded';
             this.ballState.completionReason = 'immediate_pickup';
             
-            setTimeout(() => {
-                this.completeBall();
-            }, 500);
+            // Only complete immediately if batsman is NOT running (no run-out possible)
+            if (!this.runningSystem.isRunning) {
+                console.log('🔚 Batsman not running - completing ball immediately after pickup');
+                setTimeout(() => {
+                    this.completeBall();
+                }, 500);
+            } else {
+                console.log('🏃‍♂️ Batsman still running - delaying ball completion for potential run-out after pickup');
+                // Ball completion will happen in bowlerCatchBall() after run-out check
+            }
         }
         
         // Start throwing back to bowler after brief delay
@@ -3193,11 +3206,19 @@ class CricketGame {
         
         if (ballType === 'wicket') {
             titleText = 'WICKET!';
-            summaryText = runs === 0 ? 'Wicket taken!' : 
-                         runs === 1 ? 'Wicket taken (1 run scored)' : 
-                         `Wicket taken (${runs} runs scored)`;
-            ballTypeText = ' (Caught!)';
-            borderColor = '#ff4444'; // Red border for wickets
+            if (this.ballState.completionReason === 'run_out') {
+                summaryText = runs === 0 ? 'RUN OUT!' : 
+                             runs === 1 ? 'RUN OUT! (1 run scored)' : 
+                             `RUN OUT! (${runs} runs scored)`;
+                ballTypeText = ' (Caught short!)';
+                borderColor = '#ff6b35'; // Orange border for run-outs
+            } else {
+                summaryText = runs === 0 ? 'Wicket taken!' : 
+                             runs === 1 ? 'Wicket taken (1 run scored)' : 
+                             `Wicket taken (${runs} runs scored)`;
+                ballTypeText = ' (Caught!)';
+                borderColor = '#ff4444'; // Red border for catches
+            }
         } else {
             summaryText = runs === 0 ? 'No runs' : 
                          runs === 1 ? '1 run' : 
@@ -3740,6 +3761,96 @@ class CricketGame {
         console.log('🔄 Running system reset - batsman back at starting position');
     }
 
+    // ✅ NEW: Check if batsman is run out
+    checkForRunOut() {
+        // Run-out occurs when:
+        // 1. Batsman is currently running between wickets
+        // 2. Ball reaches the bowler/keeper before batsman completes the run
+        
+        console.log('🔍 DEBUG: checkForRunOut() called');
+        console.log(`   Running state: isRunning=${this.runningSystem.isRunning}, runState=${this.runningSystem.runState}`);
+        console.log(`   Run progress: ${(this.runningSystem.runProgress * 100).toFixed(1)}%`);
+        console.log(`   Current end: ${this.runningSystem.currentEnd}, Target: ${this.runningSystem.targetEnd}`);
+        
+        if (!this.runningSystem.isRunning) {
+            console.log('❌ No run-out - batsman not running');
+            return false; // Not running, can't be run out
+        }
+        
+        // Check if batsman is in the middle of a run (not at either end)
+        const runProgress = this.runningSystem.runProgress;
+        const isInMiddleOfRun = runProgress > 0 && runProgress < 1.0;
+        
+        console.log(`   Mid-run check: progress=${runProgress.toFixed(3)}, isInMiddle=${isInMiddleOfRun}`);
+        
+        if (!isInMiddleOfRun) {
+            console.log(`🏃‍♂️ Batsman safe - completed run (progress: ${(runProgress * 100).toFixed(1)}%)`);
+            return false; // Batsman has completed the run safely
+        }
+        
+        // Batsman is mid-run when ball reached the bowler = RUN OUT!
+        console.log(`🏃‍♂️💥 RUN OUT detected! Batsman progress: ${(runProgress * 100).toFixed(1)}%`);
+        console.log(`   Current end: ${this.runningSystem.currentEnd}, Target: ${this.runningSystem.targetEnd}`);
+        return true;
+    }
+
+    // ✅ NEW: Execute run-out wicket
+    executeRunOut() {
+        console.log(`🏃‍♂️💥 Executing RUN OUT! Batsman caught short of crease!`);
+        
+        // Stop ball movement immediately
+        this.ballPhysics.isMoving = false;
+        this.ballPhysics.velocity.set(0, 0, 0);
+        
+        // Position ball in bowler's hands
+        this.cricketBall.position.copy(this.bowler.position);
+        this.cricketBall.position.y += 1.5;
+        
+        // Clear ball trail for clean visual
+        this.clearBallTrail();
+        
+        // Stop the running system immediately - batsman is out
+        this.runningSystem.isRunning = false;
+        this.runningSystem.runState = 'idle';
+        
+        // ✅ Handle wicket scoring for run-out
+        this.cricketScore.wickets += 1;
+        console.log(`📊 RUN OUT! Wicket taken! Score: ${this.cricketScore.runs}/${this.cricketScore.wickets}`);
+        
+        // ✅ Complete the ball immediately with run-out result
+        if (this.ballState.isActive && !this.ballState.isComplete) {
+            this.ballState.ballType = 'wicket';
+            this.ballState.completionReason = 'run_out';
+            this.ballState.runsThisBall = this.runningSystem.runsCompleted; // Partial runs don't count in run-out
+            
+            // Force complete the ball immediately (run-out has priority)
+            setTimeout(() => {
+                this.forceCompleteBall();
+            }, 500);
+        }
+        
+        // ✅ Show run-out notification
+        this.showRunOutNotification();
+        
+        // Reset bowler receiving state
+        this.bowlerReceivingSystem.isReceivingThrow = false;
+        
+        // Play celebration animation on bowler
+        this.playCricketPlayerAnimation(this.bowler, 'standingidle');
+        
+        // Also show argument animation (batsman disagreeing with decision) if available
+        setTimeout(() => {
+            if (this.character.userData.animations && this.character.userData.animations.has('standingarguing')) {
+                this.playCricketPlayerAnimationOnce(this.character, 'standingarguing', () => {
+                    this.playCricketPlayerAnimation(this.character, 'standingidle');
+                });
+                console.log('😤 Batsman argues with the umpire decision!');
+            }
+        }, 1000);
+        
+        console.log(`✅ Run-out completed successfully!`);
+    }
+
     loadCricketTeam() {
         console.log('🏏 Loading cricket team...');
         
@@ -3858,12 +3969,26 @@ class CricketGame {
     bowlerCatchBall() {
         if (!this.bowler || !this.cricketBall) return;
         
+        console.log('🥎 DEBUG: bowlerCatchBall() called');
+        console.log(`   Ball state: isActive=${this.ballState.isActive}, isComplete=${this.ballState.isComplete}`);
+        
         if (this.cricketScore.boundaryAwarded) {
             console.log('📝 Ball already went for a boundary. Ignoring bowler catch.');
             this.ballPhysics.isMoving = false;
             this.ballPhysics.velocity.set(0, 0, 0);
             return;
         }
+        
+        // ✅ NEW: Check for run-out scenario
+        console.log('🔍 About to check for run-out...');
+        const isRunOut = this.checkForRunOut();
+        
+        if (isRunOut) {
+            console.log(`🏃‍♂️💥 RUN OUT! Batsman caught short while running!`);
+            this.executeRunOut();
+            return;
+        }
+        
         console.log(`✋ Bowler caught ball - ${this.runningSystem.runsCompleted} runs scored`);
         
         // Stop ball movement immediately
@@ -3880,11 +4005,15 @@ class CricketGame {
         // Play catch completion animation
         this.playCricketPlayerAnimation(this.bowler, 'standingidle');
         
-        // Complete the ball
+        // Complete the ball (this handles both run-out and normal cases)
         if (this.ballState.isActive) {
-            this.ballState.ballType = 'fielded';
-            this.ballState.completionReason = 'bowler_caught';
+            // If ball was already marked as fielded, keep that type, otherwise set as bowler caught
+            if (this.ballState.ballType !== 'fielded') {
+                this.ballState.ballType = 'fielded';
+                this.ballState.completionReason = 'bowler_caught';
+            }
             
+            console.log('🔚 Bowler caught ball - completing ball now');
             // Force complete the ball immediately (bowler has priority)
             this.forceCompleteBall();
         } else {
@@ -4626,6 +4755,53 @@ class CricketGame {
         }, 3000);
     }
 
+    // ✅ NEW: Show run-out notification
+    showRunOutNotification() {
+        // Create a notification element for run-out
+        const notification = document.createElement('div');
+        notification.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 20%;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0, 0, 0, 0.9);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                font-family: Arial, sans-serif;
+                text-align: center;
+                z-index: 1000;
+                font-size: 20px;
+                border: 3px solid #ff6b35;
+                box-shadow: 0 0 20px rgba(255, 107, 53, 0.5);
+                animation: runOutPulse 0.6s ease-in-out;
+            ">
+                <h2 style="margin: 0 0 10px 0; color: #ff6b35; font-size: 28px;">🏃‍♂️💥 RUN OUT!</h2>
+                <p style="margin: 0; font-weight: bold;">Batsman caught short of crease!</p>
+                <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">Excellent fielding by the team!</p>
+            </div>
+            <style>
+                @keyframes runOutPulse {
+                    0% { transform: translateX(-50%) scale(0.8); opacity: 0; }
+                    50% { transform: translateX(-50%) scale(1.1); opacity: 1; }
+                    100% { transform: translateX(-50%) scale(1); opacity: 1; }
+                }
+            </style>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after longer time for run-out (more dramatic)
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 4000);
+        
+        console.log('🏃‍♂️💥 Run-out notification displayed');
+    }
+
     // Method to remove objects from the scene (for future use)
     removeFromScene(object) {
         this.scene.remove(object);
@@ -4766,6 +4942,16 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(`  Progress: ${(game.runningSystem.runProgress * 100).toFixed(1)}%`);
             console.log(`  Runs Completed: ${game.runningSystem.runsCompleted}`);
             console.log(`  Waiting for Next Run: ${game.runningSystem.waitingForNextRun}`);
+            
+            // ✅ NEW: Add run-out risk assessment
+            if (game.runningSystem.isRunning) {
+                const runProgress = game.runningSystem.runProgress;
+                const isInMiddleOfRun = runProgress > 0 && runProgress < 1.0;
+                console.log(`  🚨 Run-out Risk: ${isInMiddleOfRun ? 'HIGH (mid-run)' : 'LOW (at crease)'}`);
+                if (isInMiddleOfRun) {
+                    console.log(`     ⚠️ If ball reaches bowler now = RUN OUT!`);
+                }
+            }
         };
         
         // Debug turn animation
@@ -5049,6 +5235,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  🎭 Dual criteria: closest to ball + closest to landing');
             console.log('  🔄 Improved state management');
             console.log('  🏏 WICKET HANDLING: Proper scoring, notifications, and ball completion');
+            console.log('  🏃‍♂️💥 RUN-OUT SYSTEM: Automatic run-out detection when ball reaches bowler');
             console.log('');
             console.log('🧪 TESTING COMMANDS:');
             console.log('  bowlStraight() - Bowl ball straight down pitch');
@@ -5059,6 +5246,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  checkFieldingStates() - Check all fielder states');
             console.log('  stopAllFielders() - Emergency stop all fielding');
             console.log('  testWicketScenario() - Force a wicket to test scoring');
+            console.log('  testRunOutScenario() - Force a run-out to test system');
             console.log('');
             console.log('🔧 WHAT TO LOOK FOR:');
             console.log('  ✅ Fielders closest to ball should respond first');
@@ -5066,6 +5254,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  ✅ No delays or wrong fielder assignments');
             console.log('  ✅ Clear console messaging about fielder selection');
             console.log('  ✅ Proper wicket notifications and scoring when catches succeed');
+            console.log('  ✅ Run-outs when batsman is caught mid-run');
             console.log('');
             console.log('Bowl a ball and watch the console for detailed fielding analysis!');
         };
@@ -5094,6 +5283,122 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(`📊 After wicket - Score: ${game.cricketScore.runs}/${game.cricketScore.wickets}`);
             console.log('✅ Wicket test completed! Check for notifications and score updates.');
         };
+
+        // ✅ NEW: Test run-out scenario
+        window.testRunOutScenario = () => {
+            console.log('🧪 Testing Run-Out Scenario...');
+            
+            if (!game.bowler) {
+                console.log('❌ No bowler available for run-out test');
+                return;
+            }
+            
+            // Start a new ball first
+            game.startNewBall();
+            
+            console.log(`📊 Before run-out - Score: ${game.cricketScore.runs}/${game.cricketScore.wickets}`);
+            
+            // Simulate batsman starting a run
+            game.runningSystem.isRunning = true;
+            game.runningSystem.runState = 'running';
+            game.runningSystem.runProgress = 0.6; // 60% through the run (caught short!)
+            game.runningSystem.currentEnd = 'batsman';
+            game.runningSystem.targetEnd = 'bowler';
+            game.runningSystem.runsCompleted = 0; // No completed runs yet
+            
+            console.log(`🏃‍♂️ Simulating batsman 60% through run when ball reaches bowler...`);
+            
+            // Simulate ball reaching bowler while batsman is mid-run
+            game.executeRunOut();
+            
+            console.log(`📊 After run-out - Score: ${game.cricketScore.runs}/${game.cricketScore.wickets}`);
+            console.log('✅ Run-out test completed! Check for notifications and score updates.');
+        };
+
+        // ✅ NEW: Debug actual bowler catch scenario
+        window.debugBowlerCatch = () => {
+            console.log('🔍 DEBUG: Testing actual bowler catch with running state...');
+            
+            if (!game.bowler || !game.cricketBall) {
+                console.log('❌ Missing bowler or ball');
+                return;
+            }
+            
+            // Start a new ball
+            game.startNewBall();
+            
+            // Set up running state manually
+            game.runningSystem.isRunning = true;
+            game.runningSystem.runState = 'running';
+            game.runningSystem.runProgress = 0.5; // 50% through run
+            game.runningSystem.currentEnd = 'batsman';
+            game.runningSystem.targetEnd = 'bowler';
+            
+            console.log('🏃‍♂️ Batsman set to 50% through run. Now calling bowlerCatchBall()...');
+            
+            // Trigger bowler catch
+            game.bowlerCatchBall();
+        };
+
+        // ✅ NEW: Test the fixed run-out timing
+        window.testRunOutTiming = () => {
+            console.log('🧪 Testing Fixed Run-Out Timing...');
+            
+            // Start a new ball
+            game.startNewBall();
+            
+            // Set up fielder with ball (simulate fielder pickup)
+            const testFielder = game.fielders[0];
+            if (!testFielder) {
+                console.log('❌ No fielders available');
+                return;
+            }
+            
+            // Set up running state
+            game.runningSystem.isRunning = true;
+            game.runningSystem.runState = 'running';
+            game.runningSystem.runProgress = 0.6; // 60% through run
+            game.runningSystem.currentEnd = 'batsman';
+            game.runningSystem.targetEnd = 'bowler';
+            
+            console.log('🏃‍♂️ Batsman 60% through run...');
+            console.log('🤲 Fielder picks up ball (should NOT complete ball yet)...');
+            
+            // Simulate fielder pickup (should not complete ball due to running batsman)
+            game.fielderReachBall(testFielder);
+            
+            // Wait for throw, then test bowler catch
+            setTimeout(() => {
+                console.log('🎯 Bowler catches thrown ball (should detect run-out)...');
+                game.bowlerCatchBall();
+            }, 2000);
+        };
+
+        // ✅ NEW: Test realistic run-out scenario
+        window.testRealisticRunOut = () => {
+            console.log('🧪 Testing Realistic Run-Out Scenario...');
+            console.log('This simulates: hit ball → run → fielder throws → run-out');
+            
+            // Bowl a ball first
+            game.bowlBall(new THREE.Vector3(0, 0, 1), 12);
+            
+            // Hit a defensive shot
+            setTimeout(() => {
+                game.playDefensiveShot();
+                console.log('🏏 Ball hit defensively...');
+                
+                // Start running immediately after hitting
+                setTimeout(() => {
+                    const runStarted = game.startRun();
+                    if (runStarted) {
+                        console.log('🏃‍♂️ Batsman starts running...');
+                        console.log('⚡ Wait for fielder to pick up ball and throw to bowler...');
+                        console.log('🎯 If ball reaches bowler while batsman is mid-run = RUN OUT!');
+                    }
+                }, 500);
+                
+            }, 1000);
+        };
         
         // ✅ NEW: Test scoring functions
         window.testScoring = () => {
@@ -5116,9 +5421,14 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  testImprovedFieldingV3() - test the new fielding improvements');
         console.log('  debugFieldingLive() - enhanced real-time fielding analysis');
         console.log('  testWicketScenario() - test wicket taking and scoring');
+        console.log('  testRunOutScenario() - test run-out detection (forced scenario)');
+        console.log('  testRealisticRunOut() - test realistic run-out (hit→run→field→throw)');
+        console.log('  debugBowlerCatch() - debug bowler catch with mid-run state');
+        console.log('  testRunOutTiming() - test the FIXED run-out timing issue');
         console.log('  testScoring() - test cricket scoring utility functions');
         console.log('  The system now prioritizes closest fielders and has immediate catch detection!');
         console.log('  ✅ WICKETS NOW PROPERLY HANDLED: scoring, notifications, and ball completion!');
+        console.log('  ✅ RUN-OUTS NOW IMPLEMENTED: automatic detection when ball reaches bowler!');
         
         // Legacy test function for compatibility
         window.testFieldingSystem = () => {
