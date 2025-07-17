@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-
+import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 // Cricket Game - Three.js Implementation
 class CricketGame {
     constructor() {
@@ -125,7 +126,7 @@ class CricketGame {
             fielderOriginalPositions: new Map(), // Store original fielding positions
             // Fielding zones for better assignment
             fieldingZones: {
-                'straight': ['Mid Off', 'Mid On', 'First Slip'],
+                'straight': ['Mid Off', 'Mid On'],
                 'offSide': ['Cover', 'Point', 'Gully', 'Third Man'],
                 'legSide': ['Square Leg', 'Fine Leg', 'Mid On'],
                 'behind': ['First Slip', 'Third Man', 'Fine Leg']
@@ -179,6 +180,17 @@ class CricketGame {
             runsThisBall: 0,
             ballType: 'normal', // 'normal', 'boundary', 'missed'
             completionReason: null // 'boundary', 'fielded', 'missed'
+        };
+
+        // 3D Scoreboards system
+        this.scoreboards = {
+            batsman: null, // Scoreboard at batsman's end
+            bowler: null,  // Scoreboard at bowler's end
+            font: null,    // Loaded font for text rendering
+            panels: {
+                batsman: null, // Background panel for batsman scoreboard
+                bowler: null   // Background panel for bowler scoreboard
+            }
         };
         
         // Animation system
@@ -251,6 +263,9 @@ class CricketGame {
             
             console.log('Creating ball trail system...');
             this.createBallTrail();
+            
+            console.log('Creating 3D scoreboards...');
+            this.createScoreboards();
             
             console.log('Adding event listeners...');
             this.addEventListeners();
@@ -791,6 +806,7 @@ class CricketGame {
             
             // Load additional animations for batsman
             this.loadMainCharacterAnimation('hitting.fbx');
+            this.loadMainCharacterAnimation('standingidle.fbx');
         }, 
         // Progress callback
         (progress) => {
@@ -1440,6 +1456,173 @@ class CricketGame {
         console.log('✅ Ball trail system created');
     }
 
+    createScoreboards() {
+        // Load font for 3D text
+        const fontLoader = new FontLoader();
+        
+        // Use a fallback approach if the external font fails
+        fontLoader.load(
+            'https://threejs.org/examples/fonts/helvetiker_bold.typeface.json',
+            (font) => {
+                this.scoreboards.font = font;
+                this.buildScoreboards();
+                console.log('✅ 3D scoreboards created with loaded font');
+            },
+            undefined,
+            (error) => {
+                console.warn('⚠️ Could not load external font, creating basic scoreboards');
+                this.createBasicScoreboards();
+            }
+        );
+    }
+
+    buildScoreboards() {
+        // Create scoreboards at both ends of the field
+        this.createScoreboard('batsman', new THREE.Vector3(0, 25, 75)); // Above batsman's end
+        this.createScoreboard('bowler', new THREE.Vector3(0, 25, -75));  // Above bowler's end
+        
+        console.log('✅ Both 3D scoreboards positioned');
+    }
+
+    createScoreboard(type, position) {
+        // Create background panel
+        const panelGeometry = new THREE.PlaneGeometry(12, 6);
+        const panelMaterial = new THREE.MeshLambertMaterial({
+            color: 0x1a1a2e,
+            transparent: true,
+            opacity: 0.9
+        });
+        
+        const panel = new THREE.Mesh(panelGeometry, panelMaterial);
+        panel.position.copy(position);
+        
+        // Face the center of the field
+        if (type === 'batsman') {
+            panel.rotation.x = -0.3; // Tilt down slightly
+        } else {
+            panel.rotation.x = -0.3;
+            panel.rotation.y = Math.PI; // Face opposite direction
+        }
+        
+        // Add glowing border
+        const borderGeometry = new THREE.EdgesGeometry(panelGeometry);
+        const borderMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x7490ff,
+            linewidth: 2
+        });
+        const border = new THREE.LineSegments(borderGeometry, borderMaterial);
+        panel.add(border);
+        
+        this.scene.add(panel);
+        this.scoreboards.panels[type] = panel;
+        
+        // Create initial score text
+        this.updateScoreboardText(type, panel);
+    }
+
+    updateScoreboardText(type, panel) {
+        // Remove existing text
+        const existingText = panel.children.find(child => child.userData.isScoreText);
+        if (existingText) {
+            panel.remove(existingText);
+            if (existingText.geometry) existingText.geometry.dispose();
+            if (existingText.material) existingText.material.dispose();
+        }
+        
+        // Create score text
+        const scoreText = `${this.cricketScore.runs}/${this.cricketScore.wickets}\n${this.cricketScore.overs.toFixed(1)} Overs`;
+        
+        if (this.scoreboards.font) {
+            // Use 3D text with loaded font
+            const textGeometry = new TextGeometry(scoreText, {
+                font: this.scoreboards.font,
+                size: 0.8,
+                height: 0.1,
+                curveSegments: 12,
+                bevelEnabled: true,
+                bevelThickness: 0.02,
+                bevelSize: 0.02,
+                bevelOffset: 0,
+                bevelSegments: 5
+            });
+            
+            textGeometry.computeBoundingBox();
+            const centerOffsetX = -0.5 * (textGeometry.boundingBox.max.x - textGeometry.boundingBox.min.x);
+            const centerOffsetY = -0.5 * (textGeometry.boundingBox.max.y - textGeometry.boundingBox.min.y);
+            
+            const textMaterial = new THREE.MeshPhongMaterial({
+                color: 0xffffff,
+                emissive: 0x444444
+            });
+            
+            const textMesh = new THREE.Mesh(textGeometry, textMaterial);
+            textMesh.position.x = centerOffsetX;
+            textMesh.position.y = centerOffsetY;
+            textMesh.position.z = 0.1;
+            textMesh.userData.isScoreText = true;
+            
+            panel.add(textMesh);
+        } else {
+            // Fallback to simple text display
+            this.createSimpleScoreText(panel, scoreText);
+        }
+    }
+
+    createSimpleScoreText(panel, scoreText) {
+        // Create a simple plane with text texture as fallback
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = 512;
+        canvas.height = 256;
+        
+        // Clear canvas
+        context.fillStyle = 'transparent';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw text
+        context.fillStyle = 'white';
+        context.font = 'bold 48px Arial';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        
+        const lines = scoreText.split('\n');
+        lines.forEach((line, index) => {
+            context.fillText(line, canvas.width/2, (canvas.height/2) + (index - 0.5) * 60);
+        });
+        
+        // Create texture from canvas
+        const texture = new THREE.CanvasTexture(canvas);
+        const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            transparent: true
+        });
+        
+        const geometry = new THREE.PlaneGeometry(8, 4);
+        const textMesh = new THREE.Mesh(geometry, material);
+        textMesh.position.z = 0.1;
+        textMesh.userData.isScoreText = true;
+        
+        panel.add(textMesh);
+    }
+
+    createBasicScoreboards() {
+        // Create basic scoreboards without external font dependency
+        this.scoreboards.font = null; // No font loaded
+        this.buildScoreboards();
+    }
+
+    update3DScoreboards() {
+        // Update both scoreboards with current score
+        if (this.scoreboards.panels.batsman) {
+            this.updateScoreboardText('batsman', this.scoreboards.panels.batsman);
+        }
+        if (this.scoreboards.panels.bowler) {
+            this.updateScoreboardText('bowler', this.scoreboards.panels.bowler);
+        }
+        
+        console.log('📊 3D scoreboards updated');
+    }
+
     updateBallTrail() {
         if (!this.ballTrail.enabled || !this.cricketBall) return;
         
@@ -1687,19 +1870,29 @@ class CricketGame {
         this.fieldingSystem.ballIsHit = true;
         this.fieldingSystem.ballLastPosition.copy(this.cricketBall.position);
         
-        // Find nearest fielder
-        const nearestFielder = this.findNearestFielder();
-        if (nearestFielder) {
-            this.fieldingSystem.nearestFielder = nearestFielder;
-            this.fieldingSystem.chasingFielder = nearestFielder;
+        // 🚫 SAFETY: Ensure all fielders are idle before selecting new chaser
+        this.fielders.forEach(fielder => {
+            const currentState = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+            if (currentState === 'chasing' || currentState === 'anticipating') {
+                console.log(`🔄 Resetting ${fielder.userData.description} from ${currentState} to idle`);
+                this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
+                fielder.userData.isRunningForAnticipation = false; // Clear animation flag
+            }
+        });
+        
+        // Find the single best fielder
+        const bestFielder = this.findNearestFielder();
+        if (bestFielder) {
+            this.fieldingSystem.nearestFielder = bestFielder;
+            this.fieldingSystem.chasingFielder = bestFielder;
             
-            console.log(`🏃 Nearest fielder: ${nearestFielder.userData.description} is chasing the ball!`);
+            console.log(`🏃 ONLY ${bestFielder.userData.description} will chase the ball!`);
             
-            // Set fielder to chasing state
-            this.fieldingSystem.fielderStates.set(nearestFielder.userData.description, 'chasing');
+            // Set ONLY this fielder to chasing state
+            this.fieldingSystem.fielderStates.set(bestFielder.userData.description, 'chasing');
             
-            // Start running animation for the nearest fielder
-            this.startFielderChasing(nearestFielder);
+            // Start running animation for the selected fielder
+            this.startFielderChasing(bestFielder);
         } else {
             console.log('⚠️ No fielders available to chase the ball');
         }
@@ -1708,40 +1901,60 @@ class CricketGame {
     findNearestFielder() {
         if (!this.cricketBall || this.fielders.length === 0) return null;
         
-        // First try intelligent fielder selection based on shot direction
-        const smartFielder = this.findFielderByZone();
-        if (smartFielder) {
-            return smartFielder;
-        }
+        console.log('🔍 Finding best fielder for ball chase...');
         
-        // Fallback to trajectory prediction
-        const predictedLanding = this.predictBallLanding();
+        // 🎯 IMPROVED SELECTION: Use multiple criteria to find the best fielder
+        let bestFielder = null;
+        let bestScore = Infinity;
         
-        if (!predictedLanding) {
-            // Last resort: use current ball position
-            return this.findFielderByCurrentPosition();
-        }
+        const ballPosition = this.cricketBall.position;
+        const ballVelocity = this.ballPhysics.velocity;
         
-        console.log(`🎯 Predicted ball landing: (${predictedLanding.x.toFixed(1)}, ${predictedLanding.z.toFixed(1)})`);
+        // Try to predict where ball will land
+        const predictedLanding = this.predictBallLanding() || ballPosition;
         
-        let nearestFielder = null;
-        let minDistance = Infinity;
+        console.log(`🎯 Ball direction: (${ballVelocity.x.toFixed(1)}, ${ballVelocity.z.toFixed(1)})`);
+        console.log(`🎯 Predicted landing: (${predictedLanding.x.toFixed(1)}, ${predictedLanding.z.toFixed(1)})`);
         
         this.fielders.forEach(fielder => {
-            const distance = fielder.position.distanceTo(predictedLanding);
-            console.log(`📏 ${fielder.userData.description}: distance ${distance.toFixed(1)} to landing spot`);
+            // Calculate distance to predicted landing
+            const distanceToLanding = fielder.position.distanceTo(predictedLanding);
             
-            if (distance < minDistance) {
-                minDistance = distance;
-                nearestFielder = fielder;
+            // Calculate if fielder is in the direction the ball is going
+            const fielderDirection = fielder.position.clone().sub(ballPosition);
+            fielderDirection.y = 0;
+            const ballDirection = ballVelocity.clone();
+            ballDirection.y = 0;
+            
+            // Dot product tells us if fielder is in ball's direction (1 = same direction, -1 = opposite)
+            const directionAlignment = fielderDirection.normalize().dot(ballDirection.normalize());
+            
+            // Calculate composite score (lower is better)
+            // Distance is primary factor, but heavily penalize fielders in wrong direction
+            let score = distanceToLanding;
+            
+            if (directionAlignment < 0) {
+                // Fielder is in opposite direction - heavily penalize
+                score *= 3;
+                console.log(`❌ ${fielder.userData.description}: WRONG DIRECTION (alignment: ${directionAlignment.toFixed(2)}) - Distance: ${distanceToLanding.toFixed(1)}, Score: ${score.toFixed(1)}`);
+            } else {
+                // Fielder is in right direction - bonus for good alignment
+                score *= (2 - directionAlignment); // Better alignment = lower multiplier
+                console.log(`✅ ${fielder.userData.description}: RIGHT DIRECTION (alignment: ${directionAlignment.toFixed(2)}) - Distance: ${distanceToLanding.toFixed(1)}, Score: ${score.toFixed(1)}`);
+            }
+            
+            if (score < bestScore) {
+                bestScore = score;
+                bestFielder = fielder;
             }
         });
         
-        if (nearestFielder) {
-            console.log(`🏃 Best fielder for this shot: ${nearestFielder.userData.description} (${minDistance.toFixed(1)} units from landing)`);
+        if (bestFielder) {
+            console.log(`🏆 BEST FIELDER: ${bestFielder.userData.description} (score: ${bestScore.toFixed(1)})`);
+            console.log(`🏃 Only ${bestFielder.userData.description} will chase - others stay in position!`);
         }
         
-        return nearestFielder;
+        return bestFielder;
     }
 
     findFielderByZone() {
@@ -1856,6 +2069,9 @@ class CricketGame {
         
         console.log(`🏃 ${fielder.userData.description} is now chasing the ball!`);
         
+        // Reset chase timer for new chase
+        fielder.userData.chaseStartTime = Date.now();
+        
         // Load running animation if not already loaded
         if (!fielder.userData.animations || !fielder.userData.animations.has('runningcharacter')) {
             this.loadCharacterAnimation(fielder, 'runningcharacter.fbx', fielder.userData.description);
@@ -1895,12 +2111,13 @@ class CricketGame {
         const distance = direction.length();
         
         // If fielder is close enough to the ball, stop and throw
-        if (distance < 2.0 && this.ballPhysics.velocity.length() < 0.5) {
+        if (distance < 2.5 && this.ballPhysics.velocity.length() < 0.5) {
             this.fielderReachBall(fielder);
             return;
         }
         
-        // Move fielder towards ball if ball is still moving or far away
+        // Move fielder towards ball if ball is still moving or if fielder is far from ball
+        // Fixed: Always allow movement toward ball when distance > 1.0, regardless of ball movement
         if (this.ballPhysics.isMoving || distance > 1.0) {
             direction.normalize();
             const moveSpeed = 8; // Fielder movement speed
@@ -1912,6 +2129,18 @@ class CricketGame {
             const lookAtPosition = ballPosition.clone();
             lookAtPosition.y = fielder.position.y; // Same height for proper facing
             fielder.lookAt(lookAtPosition);
+        }
+        
+        // Safety mechanism: If fielder has been chasing for too long without progress, complete the ball
+        if (!fielder.userData.chaseStartTime) {
+            fielder.userData.chaseStartTime = Date.now();
+        }
+        
+        const chaseDuration = Date.now() - fielder.userData.chaseStartTime;
+        if (chaseDuration > 10000) { // 10 seconds timeout
+            console.log(`⏰ ${fielder.userData.description} chase timeout - completing ball to prevent infinite loop`);
+            this.fielderReachBall(fielder);
+            fielder.userData.chaseStartTime = null;
         }
     }
 
@@ -1948,6 +2177,7 @@ class CricketGame {
         if (!this.cricketBall || !this.ballPhysics.isMoving) {
             // Ball stopped or disappeared, return to idle
             this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
+            fielder.userData.isRunningForAnticipation = false; // Clear animation flag
             this.playCricketPlayerAnimation(fielder, 'standingidle');
             return;
         }
@@ -1970,6 +2200,7 @@ class CricketGame {
         const distanceToTarget = fielder.position.distanceTo(intercept.position);
         if (distanceToTarget < 1.0 && !intercept.canReach) {
             this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
+            fielder.userData.isRunningForAnticipation = false; // Clear animation flag
             this.playCricketPlayerAnimation(fielder, 'standingidle');
             console.log(`🤷‍♂️ ${fielder.userData.description} couldn't reach predicted position, returning to idle`);
         }
@@ -1985,6 +2216,11 @@ class CricketGame {
             return;
         }
         console.log(`🤲 ${fielder.userData.description} has reached the ball!`);
+        
+        // Clear chase timer
+        if (fielder.userData) {
+            fielder.userData.chaseStartTime = null;
+        }
         
         // Change state to throwing
         this.fieldingSystem.fielderStates.set(fielder.userData.description, 'throwing');
@@ -2197,6 +2433,16 @@ class CricketGame {
             return;
         }
 
+        // 🚫 CRITICAL FIX: If a fielder is already chasing, don't activate others
+        // This prevents multiple fielders running for the same ball
+        const isAnyFielderChasing = Array.from(this.fieldingSystem.fielderStates.values()).some(state => 
+            state === 'chasing' || state === 'throwing'
+        );
+        
+        if (isAnyFielderChasing) {
+            return; // One fielder is already handling the ball - don't activate others
+        }
+
         const anticipationTime = this.fieldingSystem.catchingSystem.anticipationTime;
         const predictiveRange = this.fieldingSystem.catchingSystem.predictiveRange;
 
@@ -2243,12 +2489,23 @@ class CricketGame {
             lookAtPos.y = fielder.position.y;
             fielder.lookAt(lookAtPos);
             
-            // Start running animation if not already playing
-            // Load running animation if not already loaded
-            if (!fielder.userData.animations || !fielder.userData.animations.has('runningcharacter')) {
-                this.loadCharacterAnimation(fielder, 'runningcharacter.fbx', fielder.userData.description || 'fielder');
+            // 🔧 FIX: Only start running animation once, not every frame
+            // Check if fielder is already running the correct animation
+            if (!fielder.userData.isRunningForAnticipation) {
+                // Load running animation if not already loaded
+                if (!fielder.userData.animations || !fielder.userData.animations.has('runningcharacter')) {
+                    this.loadCharacterAnimation(fielder, 'runningcharacter.fbx', fielder.userData.description || 'fielder');
+                }
+                this.waitForAnimationAndPlay(fielder, 'runningcharacter', true);
+                fielder.userData.isRunningForAnticipation = true;
+                console.log(`🏃 ${fielder.userData.description} started anticipatory movement (animation started once)`);
             }
-            this.waitForAnimationAndPlay(fielder, 'runningcharacter', true);
+        } else {
+            // Fielder reached target - stop running animation flag
+            if (fielder.userData.isRunningForAnticipation) {
+                fielder.userData.isRunningForAnticipation = false;
+                console.log(`🛑 ${fielder.userData.description} reached anticipation target (animation flag cleared)`);
+            }
         }
     }
 
@@ -2432,6 +2689,10 @@ class CricketGame {
                 // Reset state to idle
                 this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
                 
+                // Clear animation flags
+                fielder.userData.isRunningForAnticipation = false;
+                fielder.userData.chaseStartTime = null;
+                
                 // Move fielder back to original position
                 const originalPos = this.fieldingSystem.fielderOriginalPositions.get(fielder.userData.description);
                 if (originalPos) {
@@ -2459,6 +2720,9 @@ class CricketGame {
         } else {
             console.warn(`⚠️ Cannot update score display - menu system not available`);
         }
+        
+        // Update 3D scoreboards
+        this.update3DScoreboards();
         
         console.log(`📊 Score updated: ${this.cricketScore.runs}/${this.cricketScore.wickets} in ${this.cricketScore.overs.toFixed(1)} overs`);
     }
@@ -2615,12 +2879,20 @@ class CricketGame {
             this.character.position.set(0, 0, 9);
             this.character.rotation.set(0, 0, 0);
             this.character.lookAt(10, 0, 10); // Face bowler
-            this.playCricketPlayerAnimation(this.character, 'standingidle');
+            
+            // Try to play standing idle, fall back to available animation if needed
+            if (this.characterAnimations.has('standingidle')) {
+                this.playCricketPlayerAnimation(this.character, 'standingidle');
+            } else if (this.characterAnimations.has('idling')) {
+                this.playCricketPlayerAnimation(this.character, 'idling');
+            } else {
+                console.log('⚠️ No idle animation available for batsman, staying in current state');
+            }
         }
         
         // Reset bowler to original position
         if (this.bowler) {
-            this.bowler.position.set(0, 0, -9); // Bowler's end
+            this.bowler.position.set(1, 0, -9); // Bowler's end
             this.bowler.rotation.set(0, 0, 0);
             this.bowler.lookAt(0, 0, 10); // Face batsman
             this.playCricketPlayerAnimation(this.bowler, 'standingidle');
@@ -2650,6 +2922,11 @@ class CricketGame {
                     fielder.position.set(originalPos.x, originalPos.y, originalPos.z);
                     fielder.rotation.set(0, 0, 0);
                     fielder.lookAt(0, 0, 5); // Face batsman
+                    
+                    // Clear all animation flags
+                    fielder.userData.isRunningForAnticipation = false;
+                    fielder.userData.chaseStartTime = null;
+                    
                     this.playCricketPlayerAnimation(fielder, 'standingidle');
                 }
             });
@@ -3073,7 +3350,7 @@ class CricketGame {
             { name: 'mid_on', x: -8, z: -22, description: 'Mid On' },
             { name: 'square_leg', x: -15, z: -8, description: 'Square Leg' },
             { name: 'fine_leg', x: -12, z: 12, description: 'Fine Leg' },
-            { name: 'third_man', x: 12, z: 35, description: 'Third Man' }
+            { name: 'third_man', x: 30, z: 24, description: 'Third Man' }
         ];
         
         // Load bowler at bowling end
@@ -4115,19 +4392,51 @@ document.addEventListener('DOMContentLoaded', () => {
             game.setBallTrailColor(color);
             console.log(`🎨 Ball trail color set to: #${color.toString(16)}`);
         };
+
+        // 3D Scoreboard controls
+        window.updateScoreboards = () => {
+            game.update3DScoreboards();
+            console.log('📊 3D scoreboards manually updated');
+        };
+        
+        window.setTestScore = (runs = 50, wickets = 3, overs = 12.4) => {
+            game.cricketScore.runs = runs;
+            game.cricketScore.wickets = wickets;
+            game.cricketScore.overs = overs;
+            game.updateCricketScore();
+            console.log(`🎯 Test score set: ${runs}/${wickets} in ${overs} overs`);
+        };
+        
+        window.hideScoreboards = () => {
+            if (game.scoreboards.panels.batsman) game.scoreboards.panels.batsman.visible = false;
+            if (game.scoreboards.panels.bowler) game.scoreboards.panels.bowler.visible = false;
+            console.log('👁️ 3D scoreboards hidden');
+        };
+        
+        window.showScoreboards = () => {
+            if (game.scoreboards.panels.batsman) game.scoreboards.panels.batsman.visible = true;
+            if (game.scoreboards.panels.bowler) game.scoreboards.panels.bowler.visible = true;
+            console.log('👁️ 3D scoreboards shown');
+        };
         
         // Expose fielding system for testing
         window.testFieldingSystem = () => {
             console.log('🧪 Testing fielding system...');
             console.log('Ball is hit:', game.fieldingSystem.ballIsHit);
+            console.log('Ball is moving:', game.ballPhysics.isMoving);
+            console.log('Ball velocity:', game.ballPhysics.velocity.length().toFixed(2));
             console.log('Fielders available:', game.fielders.length);
             
             game.fielders.forEach((fielder, i) => {
                 const state = game.fieldingSystem.fielderStates.get(fielder.userData.description);
                 const originalPos = game.fieldingSystem.fielderOriginalPositions.get(fielder.userData.description);
+                const ballDistance = game.cricketBall ? fielder.position.distanceTo(game.cricketBall.position).toFixed(1) : 'N/A';
+                const chaseTime = fielder.userData.chaseStartTime ? (Date.now() - fielder.userData.chaseStartTime) : 'N/A';
+                
                 console.log(`  ${i}: ${fielder.userData.description}`);
                 console.log(`    Current: (${fielder.position.x.toFixed(1)}, ${fielder.position.z.toFixed(1)}) - State: ${state}`);
                 console.log(`    Original: (${originalPos.x.toFixed(1)}, ${originalPos.z.toFixed(1)})`);
+                console.log(`    Distance to ball: ${ballDistance}m, Chase time: ${chaseTime}ms`);
             });
             
             if (game.cricketBall) {
@@ -4136,6 +4445,70 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (nearest) {
                     console.log('Nearest fielder:', nearest.userData.description);
                 }
+            }
+        };
+        
+        window.unstuckFielder = (fielderName) => {
+            const fielder = game.fielders.find(f => f.userData.description === fielderName);
+            if (fielder) {
+                console.log(`🔧 Manually unsticking ${fielderName}...`);
+                fielder.userData.chaseStartTime = null;
+                game.fieldingSystem.fielderStates.set(fielderName, 'idle');
+                game.startFielderReturning(fielder);
+            } else {
+                console.log(`❌ Fielder '${fielderName}' not found`);
+            }
+        };
+        
+        window.forceCompleteFielding = () => {
+            console.log('🔧 Force completing fielding sequence...');
+            game.fieldingSystem.ballIsHit = false;
+            game.fieldingSystem.chasingFielder = null;
+            game.ballPhysics.isMoving = false;
+            if (game.ballState.isActive && !game.ballState.isComplete) {
+                game.ballState.ballType = 'fielded';
+                game.ballState.completionReason = 'forced';
+                game.completeBall();
+            }
+        };
+        
+        window.stopAllFielders = () => {
+            console.log('🛑 Stopping all fielding activity...');
+            game.fielders.forEach(fielder => {
+                const state = game.fieldingSystem.fielderStates.get(fielder.userData.description);
+                if (state !== 'idle') {
+                    console.log(`  🔄 ${fielder.userData.description}: ${state} → idle`);
+                    game.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
+                    fielder.userData.isRunningForAnticipation = false; // Clear animation flag
+                    fielder.userData.chaseStartTime = null; // Clear chase timer
+                    game.playCricketPlayerAnimation(fielder, 'standingidle');
+                }
+            });
+            game.fieldingSystem.ballIsHit = false;
+            game.fieldingSystem.chasingFielder = null;
+            console.log('✅ All fielders stopped and returned to idle');
+        };
+        
+        window.checkFieldingStates = () => {
+            console.log('📊 Current fielding states:');
+            game.fielders.forEach(fielder => {
+                const state = game.fieldingSystem.fielderStates.get(fielder.userData.description);
+                const ballDistance = game.cricketBall ? fielder.position.distanceTo(game.cricketBall.position).toFixed(1) : 'N/A';
+                const isRunningFlag = fielder.userData.isRunningForAnticipation || false;
+                const chaseTime = fielder.userData.chaseStartTime ? (Date.now() - fielder.userData.chaseStartTime) : 'N/A';
+                
+                console.log(`  ${fielder.userData.description}: ${state} (${ballDistance}m from ball, running: ${isRunningFlag}, chase: ${chaseTime}ms)`);
+                
+                // Special focus on slip fielder
+                if (fielder.userData.description === 'First Slip') {
+                    console.log(`    🎯 SLIP DETAILS: Position: (${fielder.position.x.toFixed(1)}, ${fielder.position.z.toFixed(1)}), State: ${state}, Running flag: ${isRunningFlag}`);
+                }
+            });
+            
+            const activeFielders = Array.from(game.fieldingSystem.fielderStates.values()).filter(state => state !== 'idle');
+            console.log(`🏃 Active fielders: ${activeFielders.length}`);
+            if (activeFielders.length > 1) {
+                console.log('⚠️ WARNING: Multiple fielders active! Use stopAllFielders() to fix.');
             }
         };
         window.resetFielding = () => {
@@ -4234,10 +4607,19 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  toggleBallTrail() - turn trail on/off');
         console.log('  clearBallTrail() - clear current trail');
         console.log('  setBallTrailColor(0xff0000) - set trail color (hex)');
+        console.log('3D Scoreboards:');
+        console.log('  updateScoreboards() - manually update scoreboard display');
+        console.log('  setTestScore(runs, wickets, overs) - set test score values');
+        console.log('  hideScoreboards() - hide both 3D scoreboards');
+        console.log('  showScoreboards() - show both 3D scoreboards');
         console.log('Fielding System:');
         console.log('  testFieldingSystem() - debug fielding system state');
+        console.log('  checkFieldingStates() - show current state of all fielders');
+        console.log('  stopAllFielders() - immediately stop all fielding activity');
         console.log('  resetFielding() - reset fielding system to idle');
         console.log('  testCatch(fielderIndex) - test catching system with specific fielder');
+        console.log('  unstuckFielder("fielderName") - manually unstick a stuck fielder');
+        console.log('  forceCompleteFielding() - force complete current fielding sequence');
         console.log('Catching System:');
         console.log('  Regular catch: Ball within 1.5m - uses regularcatch.fbx');
         console.log('  Diving catch: Ball 2-3m away - uses divingcatch.fbx');
