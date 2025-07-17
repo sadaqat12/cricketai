@@ -1318,6 +1318,9 @@ class CricketGame {
     updateBallPhysics(deltaTime) {
         if (!this.cricketBall || !this.ballPhysics.isMoving) return;
         
+        // ✅ NEW: Check for catches FIRST while ball is in flight
+        this.checkForActiveCatches();
+        
         // Check for immediate pickup opportunities (balls on ground near fielders)
         this.checkForImmediatePickup();
         
@@ -1880,78 +1883,110 @@ class CricketGame {
             }
         });
         
-        // First, let the catch detection system check for immediate opportunities
-        // The checkForCatch system will handle catches and immediate pickups
-        // If no immediate opportunity exists, we'll assign a chaser later
-        console.log('🔍 Checking for immediate catch or pickup opportunities...');
+        // ✅ IMPROVED: Immediate response - no artificial delay
+        console.log('🔍 Checking for immediate opportunities and assigning fielders...');
         
-        // Delay the chaser assignment to allow catch detection to work first
-        setTimeout(() => {
-            this.assignFielderIfNeeded();
-        }, 100);
+        // The real-time catch detection will handle in-flight catches
+        // This handles ground fielding assignment
+        this.assignFielderIfNeeded();
     }
     
     assignFielderIfNeeded() {
-        // Only assign a fielder if no action is in progress and ball is still moving
-        if (this.fieldingSystem.catchingSystem.catchInProgress || 
-            !this.ballPhysics.isMoving || 
+        // Only assign if no catch in progress, ball still moving, and nobody chasing yet
+        if (this.fieldingSystem.catchingSystem.catchInProgress ||
+            !this.ballPhysics.isMoving ||
             this.fieldingSystem.chasingFielder) {
             console.log('🚫 Fielding already in progress or ball stopped');
             return;
         }
+    
+        console.log('🎯 Assigning fielder');
         
-        console.log('🎯 Assigning closest fielder to ball landing...');
+        const ballPos = this.cricketBall.position;
         
-        // SIMPLE APPROACH: Find closest fielder to where ball will land
-        const landingPosition = this.predictBallLanding();
-        if (!landingPosition) {
-            console.log('❌ Could not predict ball landing position');
-            return;
-        }
+        // ✅ IMPROVED: Prioritize fielders closest to current ball position
+        let closestToBall = null;
+        let closestBallDist = Infinity;
+        let closestToLanding = null;
+        let closestLandingDist = Infinity;
         
-        let closestFielder = null;
-        let closestDistance = Infinity;
+        // Predict where the ball will hit the ground for backup assignment
+        const landingPos = this.predictBallLanding();
         
-        // Find the fielder closest to the landing position
-        this.fielders.forEach(fielder => {
-            if (this.fieldingSystem.fielderStates.get(fielder.userData.description) !== 'idle') {
-                return; // Skip busy fielders
+        // Find the best fielders using both criteria
+        this.fielders.forEach(f => {
+            if (this.fieldingSystem.fielderStates.get(f.userData.description) !== 'idle')
+                return;
+                
+            // Distance to current ball position (PRIORITY)
+            const ballDistance = f.position.distanceTo(ballPos);
+            if (ballDistance < closestBallDist) {
+                closestBallDist = ballDistance;
+                closestToBall = f;
             }
             
-            const distance = fielder.position.distanceTo(landingPosition);
-            if (distance < closestDistance) {
-                closestDistance = distance;
-                closestFielder = fielder;
+            // Distance to predicted landing (BACKUP)
+            if (landingPos) {
+                const landingDistance = f.position.distanceTo(landingPos);
+                if (landingDistance < closestLandingDist) {
+                    closestLandingDist = landingDistance;
+                    closestToLanding = f;
+                }
             }
         });
         
-        if (closestFielder) {
-            console.log(`🏆 ${closestFielder.userData.description} is closest to landing position (${closestDistance.toFixed(1)}m away)`);
-            console.log(`📍 Landing position: (${landingPosition.x.toFixed(1)}, ${landingPosition.z.toFixed(1)})`);
-            
-            this.fieldingSystem.nearestFielder = closestFielder;
-            this.fieldingSystem.chasingFielder = closestFielder;
-            
-            // Set target position for fielder
-            closestFielder.userData.targetPosition = landingPosition.clone();
-            
-            // Determine if this could be a catch (ball in air) or ground fielding
-            const ballHeight = this.cricketBall.position.y;
-            const ballSpeed = this.ballPhysics.velocity.length();
-            
-            if (ballHeight > 1.0 && ballSpeed > 5.0) {
-                console.log(`🥎 ${closestFielder.userData.description} will attempt to intercept for catch!`);
-                this.fieldingSystem.fielderStates.set(closestFielder.userData.description, 'intercepting');
-                this.startDirectIntercept(closestFielder, landingPosition);
+        // ✅ PRIORITY LOGIC: Choose the best fielder
+        let selectedFielder = null;
+        let strategy = '';
+        
+        // If someone is close to the ball (within 20m), prioritize them
+        if (closestToBall && closestBallDist <= 20) {
+            selectedFielder = closestToBall;
+            strategy = `closest to ball (${closestBallDist.toFixed(1)}m)`;
+        }
+        // Otherwise, use the fielder closest to landing position
+        else if (closestToLanding && landingPos) {
+            selectedFielder = closestToLanding;
+            strategy = `closest to landing (${closestLandingDist.toFixed(1)}m)`;
+        }
+        
+        if (!selectedFielder) {
+            console.log('⚠️ No suitable fielders available');
+            return;
+        }
+        
+        console.log(`🎯 Selected ${selectedFielder.userData.description} - ${strategy}`);
+        
+        // Set this fielder as the chaser
+        this.fieldingSystem.chasingFielder = selectedFielder;
+    
+        // Decide catch vs. ground‑field based on ball characteristics
+        const ballHeight = this.cricketBall.position.y;
+        const ballSpeed = this.ballPhysics.velocity.length();
+        
+        if (ballHeight > 1.0 && ballSpeed > 5.0 && closestBallDist <= 15) {
+            // → High, fast ball and fielder is reasonably close: try direct intercept
+            const intercept = this.calculateInterceptPoint(
+                selectedFielder,
+                this.fieldingSystem.catchingSystem.anticipationTime
+            );
+            if (intercept.canReach) {
+                console.log(`🥎 ${selectedFielder.userData.description} will intercept in air at (${intercept.position.x.toFixed(1)}, ${intercept.position.z.toFixed(1)})`);
+                this.fieldingSystem.fielderStates.set(selectedFielder.userData.description, 'anticipating');
+                this.startDirectIntercept(selectedFielder, intercept.position);
             } else {
-                console.log(`🏃 ${closestFielder.userData.description} will chase for ground fielding!`);
-                this.fieldingSystem.fielderStates.set(closestFielder.userData.description, 'chasing');
-                this.startFielderChasing(closestFielder);
+                console.log(`⚠️ ${selectedFielder.userData.description} can't reach intercept, chasing directly`);
+                this.fieldingSystem.fielderStates.set(selectedFielder.userData.description, 'chasing');
+                this.startFielderChasing(selectedFielder);
             }
         } else {
-            console.log('⚠️ No idle fielders available');
+            // → Ball is low, slow, or fielder is far: simple ground field
+            console.log(`🏃 ${selectedFielder.userData.description} will chase for ground fielding`);
+            this.fieldingSystem.fielderStates.set(selectedFielder.userData.description, 'chasing');
+            this.startFielderChasing(selectedFielder);
         }
     }
+    
 
 
 
@@ -2667,6 +2702,12 @@ class CricketGame {
     }
 
     attemptCatch(fielder, distance) {
+        // ✅ IMPROVED: Check if catch is already in progress
+        if (this.fieldingSystem.catchingSystem.catchInProgress) {
+            console.log(`⚠️ Catch already in progress by ${this.fieldingSystem.catchingSystem.catchingFielder?.userData?.description || 'unknown'}`);
+            return;
+        }
+        
         // Mark catch in progress
         this.fieldingSystem.catchingSystem.catchInProgress = true;
         this.fieldingSystem.catchingSystem.catchingFielder = fielder;
@@ -2790,6 +2831,25 @@ class CricketGame {
         
         // Clear ball trail for clean visual
         this.clearBallTrail();
+        
+        // ✅ NEW: Handle wicket scoring
+        this.cricketScore.wickets += 1;
+        console.log(`📊 Wicket taken! Score: ${this.cricketScore.runs}/${this.cricketScore.wickets}`);
+        
+        // ✅ NEW: Complete the ball immediately with wicket result
+        if (this.ballState.isActive && !this.ballState.isComplete) {
+            this.ballState.ballType = 'wicket';
+            this.ballState.completionReason = 'caught';
+            this.ballState.runsThisBall = this.runningSystem.runsCompleted; // Any runs completed before catch
+            
+            // Force complete the ball immediately (wicket has priority)
+            setTimeout(() => {
+                this.forceCompleteBall();
+            }, 500);
+        }
+        
+        // ✅ NEW: Show wicket notification
+        this.showWicketNotification(fielder, catchType);
         
         // Celebrate animation could be added here
         setTimeout(() => {
@@ -2966,14 +3026,19 @@ class CricketGame {
         this.ballState.isComplete = true; 
         this.ballState.isActive = false; // The ball is no longer active.
         
-        // If a boundary was scored, the runs are already set.
-        // Otherwise, the runs are the number of completed runs between wickets.
-        if (!this.cricketScore.boundaryAwarded) {
-            this.ballState.runsThisBall = this.runningSystem.runsCompleted;
+        // ✅ IMPROVED: Handle wickets vs runs properly
+        if (this.ballState.ballType === 'wicket') {
+            // For wickets, runs were already set by successfulCatch, and wicket count was already incremented
+            console.log(`🎯 Completing wicket ball: ${this.ballState.runsThisBall} runs (wicket already counted)`);
+        } else {
+            // For non-wicket balls, set runs normally
+            if (!this.cricketScore.boundaryAwarded) {
+                this.ballState.runsThisBall = this.runningSystem.runsCompleted;
+            }
+            console.log(`🎯 Completing ball: ${this.ballState.runsThisBall} runs (${this.ballState.ballType})`);
         }
         
-        console.log(`🎯 Completing ball: ${this.ballState.runsThisBall} runs (${this.ballState.ballType})`);
-        console.log(`🔍 Before adding runs - Current total: ${this.cricketScore.runs} runs`);
+        console.log(`🔍 Before adding runs - Current total: ${this.cricketScore.runs}/${this.cricketScore.wickets}`);
 
         // STOP running system to prevent continuous updates
         this.runningSystem.isRunning = false;
@@ -2988,7 +3053,7 @@ class CricketGame {
         const ballsInCurrentOver = this.cricketScore.balls % 6;
         this.cricketScore.overs = completedOvers + (ballsInCurrentOver / 10.0);
        
-        console.log(`🔍 After adding runs - New total: ${this.cricketScore.runs} runs (added ${this.ballState.runsThisBall})`);
+        console.log(`🔍 After adding runs - New total: ${this.cricketScore.runs}/${this.cricketScore.wickets} (added ${this.ballState.runsThisBall} runs)`);
         
         // Update score display
         this.updateCricketScore();
@@ -3006,12 +3071,28 @@ class CricketGame {
 
     // Show ball completion summary
     showBallSummary(runs, ballType) {
-        const summaryText = runs === 0 ? 'No runs' : 
-                           runs === 1 ? '1 run' : 
-                           `${runs} runs`;
+        // ✅ IMPROVED: Handle wickets properly
+        let summaryText;
+        let ballTypeText = '';
+        let titleText = 'Ball Complete';
+        let borderColor = '#4ecdc4';
         
-        const ballTypeText = ballType === 'boundary' ? ' (Boundary!)' : 
-                            ballType === 'fielded' ? ' (Fielded)' : '';
+        if (ballType === 'wicket') {
+            titleText = 'WICKET!';
+            summaryText = runs === 0 ? 'Wicket taken!' : 
+                         runs === 1 ? 'Wicket taken (1 run scored)' : 
+                         `Wicket taken (${runs} runs scored)`;
+            ballTypeText = ' (Caught!)';
+            borderColor = '#ff4444'; // Red border for wickets
+        } else {
+            summaryText = runs === 0 ? 'No runs' : 
+                         runs === 1 ? '1 run' : 
+                         `${runs} runs`;
+            
+            ballTypeText = ballType === 'boundary' ? ' (Boundary!)' : 
+                          ballType === 'fielded' ? ' (Fielded)' : 
+                          ballType === 'normal' ? '' : '';
+        }
         
         // Create summary notification
         const notification = document.createElement('div');
@@ -3029,22 +3110,31 @@ class CricketGame {
                 text-align: center;
                 z-index: 1000;
                 font-size: 18px;
-                border: 2px solid #4ecdc4;
+                border: 2px solid ${borderColor};
+                ${ballType === 'wicket' ? 'animation: pulse 0.5s ease-in-out;' : ''}
             ">
-                <h3 style="margin: 0 0 10px 0;">Ball Complete</h3>
+                <h3 style="margin: 0 0 10px 0; ${ballType === 'wicket' ? 'color: #ff4444;' : ''}">${titleText}</h3>
                 <p style="margin: 0;">${summaryText}${ballTypeText}</p>
-                <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.8;">Total: ${this.cricketScore.runs} runs</p>
+                <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.8;">Total: ${this.cricketScore.runs}/${this.cricketScore.wickets}</p>
             </div>
+            <style>
+                @keyframes pulse {
+                    0% { transform: translateX(-50%) scale(1); }
+                    50% { transform: translateX(-50%) scale(1.05); }
+                    100% { transform: translateX(-50%) scale(1); }
+                }
+            </style>
         `;
         
         document.body.appendChild(notification);
         
-        // Remove notification after 3 seconds
+        // Remove notification after longer time for wickets
+        const displayTime = ballType === 'wicket' ? 4000 : 3000;
         setTimeout(() => {
             if (notification.parentNode) {
                 notification.parentNode.removeChild(notification);
             }
-        }, 3000);
+        }, displayTime);
     }
 
     // Reset players to initial positions for next ball
@@ -4318,6 +4408,93 @@ class CricketGame {
     removeFromScene(object) {
         this.scene.remove(object);
     }
+
+    checkForActiveCatches() {
+        // ✅ NEW: Real-time catch detection for balls in flight
+        if (!this.fieldingSystem.ballIsHit || 
+            this.fieldingSystem.catchingSystem.catchInProgress ||
+            !this.ballPhysics.isMoving) {
+            return;
+        }
+
+        const ballPos = this.cricketBall.position;
+        const ballHeight = ballPos.y;
+        const ballSpeed = this.ballPhysics.velocity.length();
+        
+        // Only check for catches if ball is at catchable height and moving reasonably fast
+        if (ballHeight < 0.2 || ballHeight > 15 || ballSpeed < 2) {
+            return;
+        }
+
+        let closestFielder = null;
+        let closestDistance = Infinity;
+        
+        // ✅ FIXED: Find fielder closest to CURRENT ball position, not prediction
+        this.fielders.forEach(fielder => {
+            const fielderState = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+            
+            // Only consider idle or chasing fielders for catches
+            if (fielderState !== 'idle' && fielderState !== 'chasing' && fielderState !== 'anticipating') {
+                return;
+            }
+            
+            const distance = fielder.position.distanceTo(ballPos);
+            
+            // Check if this fielder is within catch range
+            if (distance <= this.fieldingSystem.catchingSystem.catchRadius && distance < closestDistance) {
+                closestDistance = distance;
+                closestFielder = fielder;
+            }
+        });
+        
+        if (closestFielder) {
+            console.log(`🎯 CATCH OPPORTUNITY! ${closestFielder.userData.description} is ${closestDistance.toFixed(1)}m from ball (height: ${ballHeight.toFixed(1)}m)`);
+            
+            // Clear any existing chaser - this fielder is taking over
+            if (this.fieldingSystem.chasingFielder && this.fieldingSystem.chasingFielder !== closestFielder) {
+                console.log(`   Clearing previous chaser: ${this.fieldingSystem.chasingFielder.userData.description}`);
+                this.fieldingSystem.fielderStates.set(this.fieldingSystem.chasingFielder.userData.description, 'idle');
+                this.fieldingSystem.chasingFielder = null;
+            }
+            
+            // Attempt the catch immediately
+            this.attemptCatch(closestFielder, closestDistance);
+        }
+    }
+
+    showWicketNotification(fielder, catchType) {
+        // Create a notification element
+        const notification = document.createElement('div');
+        notification.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 20%;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                font-family: Arial, sans-serif;
+                text-align: center;
+                z-index: 1000;
+                font-size: 16px;
+                border: 1px solid #4ecdc4;
+            ">
+                <h3 style="margin: 0 0 5px 0;">Wicket!</h3>
+                <p style="margin: 0;">${fielder.userData.description} took a spectacular ${catchType}!</p>
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after 3 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 3000);
+    }
 }
 
 // Initialize the game when the page loads
@@ -4671,6 +4848,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     closestToLanding = fielder;
                 }
                 
+                // ✅ NEW: Show catch eligibility
+                if (ballDist <= game.fieldingSystem.catchingSystem.catchRadius) {
+                    console.log(`    🎯 CATCH ELIGIBLE! (${ballDist.toFixed(1)}m <= ${game.fieldingSystem.catchingSystem.catchRadius}m)`);
+                }
+                
                 // Check immediate pickup eligibility
                 if (ballDist <= 2.0) {
                     console.log(`    🚨 IMMEDIATE PICKUP RANGE! (${ballDist.toFixed(1)}m <= 2.0m)`);
@@ -4683,9 +4865,93 @@ document.addEventListener('DOMContentLoaded', () => {
             // Check system states
             console.log('🔧 SYSTEM STATUS:');
             console.log(`   Catch in progress: ${game.fieldingSystem.catchingSystem.catchInProgress}`);
+            console.log(`   Catching fielder: ${game.fieldingSystem.catchingSystem.catchingFielder?.userData?.description || 'None'}`);
             console.log(`   Chasing fielder: ${game.fieldingSystem.chasingFielder ? game.fieldingSystem.chasingFielder.userData.description : 'None'}`);
             console.log(`   Nearest fielder: ${game.fieldingSystem.nearestFielder ? game.fieldingSystem.nearestFielder.userData.description : 'None'}`);
         };
+        
+        // ✅ NEW: Test the improved fielding system
+        window.testImprovedFieldingV3 = () => {
+            console.log('🚀 Testing Improved Fielding System v3.0');
+            console.log('==========================================');
+            console.log('');
+            console.log('✅ NEW FEATURES:');
+            console.log('  🎯 Real-time catch detection (checkForActiveCatches)');
+            console.log('  🏃 Closest fielder prioritization');
+            console.log('  ⚡ Immediate response (no artificial delays)');
+            console.log('  🎭 Dual criteria: closest to ball + closest to landing');
+            console.log('  🔄 Improved state management');
+            console.log('  🏏 WICKET HANDLING: Proper scoring, notifications, and ball completion');
+            console.log('');
+            console.log('🧪 TESTING COMMANDS:');
+            console.log('  bowlStraight() - Bowl ball straight down pitch');
+            console.log('  playUpperCut() - Hit ball high to off-side');
+            console.log('  playLoftedShot() - Hit ball high and straight');
+            console.log('  playSlog() - Aggressive shot to leg-side');
+            console.log('  debugFieldingLive() - Real-time analysis');
+            console.log('  checkFieldingStates() - Check all fielder states');
+            console.log('  stopAllFielders() - Emergency stop all fielding');
+            console.log('  testWicketScenario() - Force a wicket to test scoring');
+            console.log('');
+            console.log('🔧 WHAT TO LOOK FOR:');
+            console.log('  ✅ Fielders closest to ball should respond first');
+            console.log('  ✅ Immediate catch attempts for balls in flight');
+            console.log('  ✅ No delays or wrong fielder assignments');
+            console.log('  ✅ Clear console messaging about fielder selection');
+            console.log('  ✅ Proper wicket notifications and scoring when catches succeed');
+            console.log('');
+            console.log('Bowl a ball and watch the console for detailed fielding analysis!');
+        };
+        
+        // ✅ NEW: Test wicket scenario
+        window.testWicketScenario = () => {
+            console.log('🧪 Testing Wicket Scenario...');
+            
+            if (!game.fielders || game.fielders.length === 0) {
+                console.log('❌ No fielders available for wicket test');
+                return;
+            }
+            
+            // Start a new ball first
+            game.startNewBall();
+            
+            // Get the first fielder for testing
+            const testFielder = game.fielders[0];
+            
+            console.log(`🎯 Simulating successful catch by ${testFielder.userData.description}`);
+            console.log(`📊 Before wicket - Score: ${game.cricketScore.runs}/${game.cricketScore.wickets}`);
+            
+            // Simulate a successful catch
+            game.successfulCatch(testFielder, 'regularcatch');
+            
+            console.log(`📊 After wicket - Score: ${game.cricketScore.runs}/${game.cricketScore.wickets}`);
+            console.log('✅ Wicket test completed! Check for notifications and score updates.');
+        };
+        
+        // ✅ NEW: Test scoring functions
+        window.testScoring = () => {
+            console.log('📊 Testing Cricket Scoring Functions...');
+            console.log('');
+            console.log('🔧 Current Score Functions:');
+            console.log(`  Current Score: ${window.CricketScoring.formatScore()}`);
+            console.log(`  Ball State: ${JSON.stringify(window.CricketScoring.getBallState())}`);
+            console.log(`  Game Active: ${window.CricketScoring.isGameActive()}`);
+            console.log('');
+            console.log('🧮 Utility Functions:');
+            console.log(`  Run Rate (50 runs in 10 overs): ${window.CricketScoringUtils.calculateRunRate(50, 10)}`);
+            console.log(`  Required RR (100 runs in 20 overs): ${window.CricketScoringUtils.calculateRequiredRunRate(100, 20)}`);
+            console.log(`  Balls to Overs (37 balls): ${window.CricketScoringUtils.ballsToOvers(37)}`);
+            console.log(`  Overs to Balls (6.2 overs): ${window.CricketScoringUtils.oversToBalls(6.2)}`);
+        };
+        
+        // Add to the existing console help
+        console.log('🆕 NEW FIELDING TESTS:');
+        console.log('  testImprovedFieldingV3() - test the new fielding improvements');
+        console.log('  debugFieldingLive() - enhanced real-time fielding analysis');
+        console.log('  testWicketScenario() - test wicket taking and scoring');
+        console.log('  testScoring() - test cricket scoring utility functions');
+        console.log('  The system now prioritizes closest fielders and has immediate catch detection!');
+        console.log('  ✅ WICKETS NOW PROPERLY HANDLED: scoring, notifications, and ball completion!');
         
         // Legacy test function for compatibility
         window.testFieldingSystem = () => {
