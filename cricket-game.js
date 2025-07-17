@@ -206,6 +206,48 @@ class CricketGame {
             'leftturn.fbx'
         ];
         
+        // ✅ NEW: Batting Team and Scorecard System
+        this.battingTeam = {
+            teamName: 'England',
+            matchDetails: 'Cricket 3D - Practice Match',
+            currentBatsman: 0, // Index of current batsman (0-10)
+            currentPartner: 1,  // Index of non-striker (0-10)
+            extras: {
+                byes: 0,
+                legByes: 0,
+                wides: 0,
+                noBalls: 0,
+                penalties: 0
+            },
+            players: [
+                // Opening batsmen
+                { name: 'A Cook', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 1 },
+                { name: 'S Robson', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 2 },
+                
+                // Top order
+                { name: 'G Ballance', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 3 },
+                { name: 'I Bell', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 4 },
+                { name: 'J Root', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 5 },
+                
+                // Middle order
+                { name: 'Moeen Ali', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 6 },
+                { name: 'J Buttler', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 7 },
+                
+                // Lower order
+                { name: 'C Woakes', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 8 },
+                { name: 'C Jordan', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 9 },
+                { name: 'S Broad', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 10 },
+                { name: 'J Anderson', runs: 0, ballsFaced: 0, dismissal: null, isOut: false, position: 11 }
+            ]
+        };
+
+        // Scorecard UI system
+        this.scorecardUI = {
+            isVisible: false,
+            container: null,
+            button: null
+        };
+        
         // Don't initialize immediately - wait for menu system to call start()
     }
 
@@ -264,11 +306,14 @@ class CricketGame {
             console.log('Creating ball trail system...');
             this.createBallTrail();
             
-            console.log('Creating 3D scoreboards...');
-            this.createScoreboards();
-            
-            console.log('Adding event listeners...');
-            this.addEventListeners();
+                    console.log('Creating 3D scoreboards...');
+        this.createScoreboards();
+        
+        console.log('Creating scorecard UI...');
+        this.createScorecardUI();
+        
+        console.log('Adding event listeners...');
+        this.addEventListeners();
             
             console.log('Starting animation loop...');
             this.animate();
@@ -1612,6 +1657,323 @@ class CricketGame {
         // Create basic scoreboards without external font dependency
         this.scoreboards.font = null; // No font loaded
         this.buildScoreboards();
+    }
+
+    // ✅ NEW: Scorecard UI System
+    createScorecardUI() {
+        // Create scorecard button
+        this.createScorecardButton();
+        
+        // Create scorecard container (initially hidden)
+        this.createScorecardContainer();
+        
+        console.log('✅ Scorecard UI created');
+    }
+
+    createScorecardButton() {
+        // Create scorecard toggle button
+        const button = document.createElement('button');
+        button.innerHTML = '📊 SCORECARD';
+        button.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(10, 10, 26, 0.9);
+            color: #7490ff;
+            border: 2px solid rgba(116, 144, 255, 0.4);
+            border-radius: 20px;
+            padding: 15px 25px;
+            font-family: 'Orbitron', Arial, sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            z-index: 1000;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            text-shadow: 0 0 10px rgba(116, 144, 255, 0.5);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        `;
+        
+        // Hover effects
+        button.addEventListener('mouseenter', () => {
+            button.style.background = 'rgba(116, 144, 255, 0.2)';
+            button.style.borderColor = 'rgba(116, 144, 255, 0.8)';
+            button.style.transform = 'scale(1.05)';
+            button.style.boxShadow = '0 6px 25px rgba(116, 144, 255, 0.4)';
+        });
+        
+        button.addEventListener('mouseleave', () => {
+            button.style.background = 'rgba(10, 10, 26, 0.9)';
+            button.style.borderColor = 'rgba(116, 144, 255, 0.4)';
+            button.style.transform = 'scale(1)';
+            button.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.3)';
+        });
+        
+        // Toggle scorecard visibility
+        button.addEventListener('click', () => {
+            this.toggleScorecard();
+        });
+        
+        document.body.appendChild(button);
+        this.scorecardUI.button = button;
+    }
+
+    createScorecardContainer() {
+        const container = document.createElement('div');
+        container.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.95);
+            color: white;
+            border: 3px solid #4ecdc4;
+            border-radius: 15px;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            z-index: 2000;
+            max-width: 90%;
+            max-height: 90%;
+            overflow-y: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            backdrop-filter: blur(10px);
+            display: none;
+        `;
+        
+        document.body.appendChild(container);
+        this.scorecardUI.container = container;
+        
+        // Update scorecard content initially
+        this.updateScorecardDisplay();
+    }
+
+    toggleScorecard() {
+        this.scorecardUI.isVisible = !this.scorecardUI.isVisible;
+        
+        if (this.scorecardUI.isVisible) {
+            this.updateScorecardDisplay(); // Refresh data
+            this.scorecardUI.container.style.display = 'block';
+            this.scorecardUI.button.innerHTML = '❌ CLOSE';
+        } else {
+            this.scorecardUI.container.style.display = 'none';
+            this.scorecardUI.button.innerHTML = '📊 SCORECARD';
+        }
+    }
+
+    updateScorecardDisplay() {
+        if (!this.scorecardUI.container) return;
+        
+        const team = this.battingTeam;
+        const score = this.cricketScore;
+        
+        // Calculate extras total
+        const extrasTotal = team.extras.byes + team.extras.legByes + 
+                           team.extras.wides + team.extras.noBalls + team.extras.penalties;
+        
+        // Generate scorecard HTML
+        const html = `
+            <div style="text-align: center; margin-bottom: 20px;">
+                <h2 style="margin: 0; color: #4ecdc4; font-size: 24px;">${team.teamName}</h2>
+                <p style="margin: 5px 0; color: #ccc;">${team.matchDetails}</p>
+                <h3 style="margin: 10px 0; color: #fff;">1st Innings</h3>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 10px; background: rgba(78, 205, 196, 0.1); border-radius: 8px;">
+                <div style="color: #4ecdc4; font-weight: bold;">
+                    RUNS: ${score.runs}
+                </div>
+                <div style="color: #4ecdc4; font-weight: bold;">
+                    BALLS: ${score.balls}
+                </div>
+                <div style="color: #4ecdc4; font-weight: bold;">
+                    TOTAL: ${score.runs}/${score.wickets}
+                </div>
+            </div>
+            
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                <thead>
+                    <tr style="background: rgba(78, 205, 196, 0.2);">
+                        <th style="text-align: left; padding: 8px; border-bottom: 2px solid #4ecdc4;">Batsman</th>
+                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #4ecdc4;">How Out</th>
+                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #4ecdc4;">Runs</th>
+                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #4ecdc4;">Balls</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${this.generatePlayerRows()}
+                </tbody>
+            </table>
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                <div>
+                    <strong style="color: #4ecdc4;">EXTRAS</strong>
+                    <div style="margin-left: 20px; color: #ccc;">
+                        ${extrasTotal > 0 ? `
+                            ${team.extras.byes > 0 ? `b: ${team.extras.byes}<br>` : ''}
+                            ${team.extras.legByes > 0 ? `lb: ${team.extras.legByes}<br>` : ''}
+                            ${team.extras.wides > 0 ? `w: ${team.extras.wides}<br>` : ''}
+                            ${team.extras.noBalls > 0 ? `nb: ${team.extras.noBalls}<br>` : ''}
+                            ${team.extras.penalties > 0 ? `pen: ${team.extras.penalties}<br>` : ''}
+                        ` : 'None'}
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <strong style="color: #4ecdc4;">${extrasTotal}</strong>
+                </div>
+            </div>
+            
+            <div style="text-align: center; padding: 15px; background: rgba(78, 205, 196, 0.1); border-radius: 8px; font-size: 18px; font-weight: bold;">
+                <span style="color: #4ecdc4;">TOTAL</span>
+                <span style="color: white; margin-left: 20px;">${score.runs}/${score.wickets} (${score.overs.toFixed(1)} overs)</span>
+            </div>
+            
+            <div style="text-align: center; margin-top: 15px;">
+                <div style="font-size: 14px; color: #ccc;">
+                    Current Batsmen: 
+                    <span style="color: #4ecdc4;">${team.players[team.currentBatsman].name}</span>
+                    ${!team.players[team.currentPartner].isOut ? 
+                        ` & <span style="color: #4ecdc4;">${team.players[team.currentPartner].name}</span>` : 
+                        ' & Next Batsman'
+                    }
+                </div>
+            </div>
+        `;
+        
+        this.scorecardUI.container.innerHTML = html;
+    }
+
+    generatePlayerRows() {
+        const team = this.battingTeam;
+        let rows = '';
+        
+        team.players.forEach((player, index) => {
+            // Determine row styling
+            let rowStyle = 'border-bottom: 1px solid rgba(78, 205, 196, 0.3);';
+            let nameStyle = '';
+            
+            // Highlight current batsmen
+            if (index === team.currentBatsman) {
+                rowStyle += 'background: rgba(255, 215, 0, 0.1);'; // Gold for striker
+                nameStyle = 'color: #ffd700; font-weight: bold;';
+            } else if (index === team.currentPartner && !player.isOut) {
+                rowStyle += 'background: rgba(255, 215, 0, 0.05);'; // Light gold for non-striker
+                nameStyle = 'color: #ffd700;';
+            }
+            
+            // Format dismissal text
+            let dismissalText = 'not out';
+            if (player.isOut && player.dismissal) {
+                dismissalText = player.dismissal;
+            }
+            
+            // Format runs display
+            const runsDisplay = player.ballsFaced > 0 || player.runs > 0 ? player.runs : '-';
+            const ballsDisplay = player.ballsFaced > 0 ? player.ballsFaced : '-';
+            
+            rows += `
+                <tr style="${rowStyle}">
+                    <td style="padding: 8px; ${nameStyle}">${player.name}</td>
+                    <td style="padding: 8px; text-align: center; font-style: italic; color: ${player.isOut ? '#ff9999' : '#99ff99'};">
+                        ${dismissalText}
+                    </td>
+                    <td style="padding: 8px; text-align: center; font-weight: bold;">${runsDisplay}</td>
+                    <td style="padding: 8px; text-align: center;">${ballsDisplay}</td>
+                </tr>
+            `;
+        });
+        
+        return rows;
+    }
+
+    // ✅ NEW: Player tracking methods
+    updateCurrentBatsmanStats(runsScored) {
+        const currentBatsman = this.battingTeam.players[this.battingTeam.currentBatsman];
+        currentBatsman.runs += runsScored;
+        currentBatsman.ballsFaced++;
+        
+        console.log(`📊 ${currentBatsman.name}: ${currentBatsman.runs} runs (${currentBatsman.ballsFaced} balls)`);
+    }
+
+    recordDismissal(dismissalType, playerIndex = null) {
+        const playerToOut = playerIndex !== null ? playerIndex : this.battingTeam.currentBatsman;
+        const player = this.battingTeam.players[playerToOut];
+        
+        console.log(`🏏 WICKET! ${player.name} ${dismissalType}`);
+        console.log(`   Before dismissal: Striker=${this.battingTeam.players[this.battingTeam.currentBatsman].name}, Non-striker=${this.battingTeam.players[this.battingTeam.currentPartner].name}`);
+        
+        player.isOut = true;
+        player.dismissal = dismissalType;
+        
+        // Always promote next batsman when someone gets out (regardless of which batsman)
+        this.promoteNextBatsman();
+        
+        // Update scorecard if visible
+        if (this.scorecardUI.isVisible) {
+            this.updateScorecardDisplay();
+        }
+        
+        console.log(`   After promotion: Striker=${this.battingTeam.players[this.battingTeam.currentBatsman].name}, Non-striker=${this.battingTeam.players[this.battingTeam.currentPartner].name}`);
+    }
+
+    promoteNextBatsman() {
+        console.log('🔄 Promoting next batsman...');
+        console.log(`   Current situation: ${this.battingTeam.players[this.battingTeam.currentBatsman].name} (OUT), ${this.battingTeam.players[this.battingTeam.currentPartner].name} (${this.battingTeam.players[this.battingTeam.currentPartner].isOut ? 'OUT' : 'NOT OUT'})`);
+        
+        // Find next available batsman who isn't already playing
+        let nextBatsman = null;
+        let nextBatsmanIndex = -1;
+        
+        for (let i = 0; i < this.battingTeam.players.length; i++) {
+            const player = this.battingTeam.players[i];
+            // Find a player who is not out and not currently batting
+            if (!player.isOut && i !== this.battingTeam.currentBatsman && i !== this.battingTeam.currentPartner) {
+                nextBatsman = player;
+                nextBatsmanIndex = i;
+                break;
+            }
+        }
+        
+        if (nextBatsman) {
+            // If partner is still not out, partner becomes striker, new batsman becomes non-striker
+            if (!this.battingTeam.players[this.battingTeam.currentPartner].isOut) {
+                console.log(`   📍 Partner ${this.battingTeam.players[this.battingTeam.currentPartner].name} becomes striker`);
+                console.log(`   📍 New batsman ${nextBatsman.name} becomes non-striker`);
+                
+                this.battingTeam.currentBatsman = this.battingTeam.currentPartner;
+                this.battingTeam.currentPartner = nextBatsmanIndex;
+            } else {
+                // Both batsmen were out, new batsman becomes striker, find another partner
+                console.log(`   📍 Both batsmen out, ${nextBatsman.name} becomes striker`);
+                this.battingTeam.currentBatsman = nextBatsmanIndex;
+                
+                // Find another partner
+                for (let i = 0; i < this.battingTeam.players.length; i++) {
+                    const player = this.battingTeam.players[i];
+                    if (!player.isOut && i !== nextBatsmanIndex) {
+                        this.battingTeam.currentPartner = i;
+                        console.log(`   📍 ${player.name} becomes non-striker`);
+                        break;
+                    }
+                }
+            }
+            
+            const currentStriker = this.battingTeam.players[this.battingTeam.currentBatsman];
+            const currentNonStriker = this.battingTeam.players[this.battingTeam.currentPartner];
+            
+            console.log(`✅ New batting pair: ${currentStriker.name} (striker) & ${currentNonStriker.name} (non-striker)`);
+        } else {
+            console.log('⚠️ No more batsmen available - innings should end');
+        }
+    }
+
+    swapBatsmen() {
+        // Swap striker and non-striker (happens on odd runs)
+        const temp = this.battingTeam.currentBatsman;
+        this.battingTeam.currentBatsman = this.battingTeam.currentPartner;
+        this.battingTeam.currentPartner = temp;
+        
+        console.log(`🔄 Batsmen swapped: ${this.battingTeam.players[this.battingTeam.currentBatsman].name} now on strike`);
     }
 
     update3DScoreboards() {
@@ -3157,6 +3519,15 @@ class CricketGame {
         if (this.ballState.ballType === 'wicket') {
             // For wickets, runs were already set by successfulCatch, and wicket count was already incremented
             console.log(`🎯 Completing wicket ball: ${this.ballState.runsThisBall} runs (wicket already counted)`);
+            
+            // ✅ NEW: Record dismissal for scorecard
+            if (this.ballState.completionReason === 'run_out') {
+                this.recordDismissal('run out');
+            } else if (this.ballState.completionReason === 'caught') {
+                this.recordDismissal('caught');
+            } else {
+                this.recordDismissal('bowled'); // Default for other wickets
+            }
         } else {
             // For non-wicket balls, set runs normally
             if (!this.cricketScore.boundaryAwarded) {
@@ -3166,6 +3537,21 @@ class CricketGame {
         }
         
         console.log(`🔍 Before adding runs - Current total: ${this.cricketScore.runs}/${this.cricketScore.wickets}`);
+
+        // ✅ NEW: Update individual batsman stats (only if not a wicket ball)
+        if (this.ballState.ballType !== 'wicket') {
+            this.updateCurrentBatsmanStats(this.ballState.runsThisBall);
+        } else {
+            // For wicket balls, just update balls faced (no runs)
+            const currentBatsman = this.battingTeam.players[this.battingTeam.currentBatsman];
+            currentBatsman.ballsFaced++;
+            console.log(`📊 ${currentBatsman.name}: WICKET (${currentBatsman.ballsFaced} balls)`);
+        }
+        
+        // ✅ NEW: Handle batsmen swapping on odd runs (1, 3, 5 runs)
+        if (this.ballState.runsThisBall % 2 === 1 && this.ballState.ballType !== 'wicket') {
+            this.swapBatsmen();
+        }
 
         // STOP running system to prevent continuous updates
         this.runningSystem.isRunning = false;
@@ -3184,6 +3570,11 @@ class CricketGame {
         
         // Update score display
         this.updateCricketScore();
+        
+        // ✅ NEW: Update scorecard if visible
+        if (this.scorecardUI.isVisible) {
+            this.updateScorecardDisplay();
+        }
         
         // Show ball completion summary
         this.showBallSummary(this.ballState.runsThisBall, this.ballState.ballType);
@@ -5223,6 +5614,224 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(`   Nearest fielder: ${game.fieldingSystem.nearestFielder ? game.fieldingSystem.nearestFielder.userData.description : 'None'}`);
         };
         
+        // ✅ NEW: Scorecard System Controls
+        window.showScorecard = () => {
+            if (!game.scorecardUI.isVisible) {
+                game.toggleScorecard();
+            }
+            console.log('📊 Scorecard displayed');
+        };
+        
+        window.hideScorecard = () => {
+            if (game.scorecardUI.isVisible) {
+                game.toggleScorecard();
+            }
+            console.log('📊 Scorecard hidden');
+        };
+        
+        window.updateScorecard = () => {
+            game.updateScorecardDisplay();
+            console.log('📊 Scorecard updated');
+        };
+        
+        window.resetTeamStats = () => {
+            // Reset all player stats
+            game.battingTeam.players.forEach(player => {
+                player.runs = 0;
+                player.ballsFaced = 0;
+                player.dismissal = null;
+                player.isOut = false;
+            });
+            
+            // Reset team position
+            game.battingTeam.currentBatsman = 0;
+            game.battingTeam.currentPartner = 1;
+            
+            // Reset extras
+            game.battingTeam.extras = {
+                byes: 0, legByes: 0, wides: 0, noBalls: 0, penalties: 0
+            };
+            
+            // Update display
+            if (game.scorecardUI.isVisible) {
+                game.updateScorecardDisplay();
+            }
+            
+            console.log('🔄 Team stats reset to starting position');
+        };
+        
+        window.simulateInnings = () => {
+            console.log('🏏 Simulating a sample innings...');
+            
+            // Reset first
+            window.resetTeamStats();
+            
+            // Simulate some realistic scores
+            const performances = [
+                { runs: 95, balls: 231, dismissal: 'caught' },      // A Cook
+                { runs: 26, balls: 59, dismissal: 'bowled' },       // S Robson  
+                { runs: 156, balls: 288, dismissal: 'run out' },    // G Ballance
+                { runs: 167, balls: 256, dismissal: 'caught' },     // I Bell
+                { runs: 3, balls: 25, dismissal: 'bowled' },        // J Root
+                { runs: 12, balls: 28, dismissal: 'caught' },       // Moeen Ali
+                { runs: 85, balls: 83, dismissal: 'caught' },       // J Buttler
+                { runs: 7, balls: 12, dismissal: null },            // C Woakes (not out)
+                { runs: 0, balls: 0, dismissal: null },             // C Jordan (not out)
+                { runs: 0, balls: 0, dismissal: null },             // S Broad (not out)
+                { runs: 0, balls: 0, dismissal: null }              // J Anderson (not out)
+            ];
+            
+            // Apply simulated data
+            performances.forEach((perf, index) => {
+                const player = game.battingTeam.players[index];
+                player.runs = perf.runs;
+                player.ballsFaced = perf.balls;
+                if (perf.dismissal) {
+                    player.isOut = true;
+                    player.dismissal = perf.dismissal;
+                }
+            });
+            
+            // Set current batsmen (those not out)
+            game.battingTeam.currentBatsman = 7;  // C Woakes
+            game.battingTeam.currentPartner = 8;  // C Jordan
+            
+            // Add some extras
+            game.battingTeam.extras.byes = 4;
+            game.battingTeam.extras.legByes = 8;
+            game.battingTeam.extras.wides = 3;
+            game.battingTeam.extras.noBalls = 3;
+            
+            // Update total score to match
+            const totalRuns = performances.reduce((sum, p) => sum + p.runs, 0) + 18; // +18 for extras
+            game.cricketScore.runs = totalRuns;
+            game.cricketScore.wickets = 7;
+            game.cricketScore.balls = 981; // 163.3 overs
+            game.cricketScore.overs = 163.3;
+            
+            // Update displays
+            game.updateCricketScore();
+            if (game.scorecardUI.isVisible) {
+                game.updateScorecardDisplay();
+            }
+            
+            console.log(`✅ Sample innings simulated: ${totalRuns}/7 (163.3 overs)`);
+            console.log('📊 Run showScorecard() to see the full scorecard');
+        };
+        
+        window.testWicket = (dismissalType = 'caught') => {
+            // Start a new ball and record a wicket
+            game.startNewBall();
+            game.ballState.ballType = 'wicket';
+            game.ballState.completionReason = dismissalType === 'run out' ? 'run_out' : 'caught';
+            game.ballState.runsThisBall = 0;
+            
+            // Complete the ball to trigger wicket processing
+            game.doCompleteBall();
+            
+            console.log(`🏏 Test wicket recorded: ${dismissalType}`);
+        };
+        
+        window.testBoundary = (boundaryType = 4) => {
+            // Start a new ball and score boundary
+            game.startNewBall();
+            game.ballState.ballType = 'boundary';
+            game.ballState.completionReason = 'boundary';
+            game.ballState.runsThisBall = boundaryType;
+            
+            // Complete the ball
+            game.doCompleteBall();
+            
+            console.log(`🏏 Test boundary scored: ${boundaryType} runs`);
+        };
+        
+        window.getCurrentBatsman = () => {
+            const striker = game.battingTeam.players[game.battingTeam.currentBatsman];
+            const nonStriker = game.battingTeam.players[game.battingTeam.currentPartner];
+            
+            console.log(`🏏 Current Batsmen:`);
+            console.log(`   On Strike: ${striker.name} (${striker.runs} runs, ${striker.ballsFaced} balls) ${striker.isOut ? '[OUT]' : ''}`);
+            console.log(`   Non-Strike: ${nonStriker.name} (${nonStriker.runs} runs, ${nonStriker.ballsFaced} balls) ${nonStriker.isOut ? '[OUT]' : ''}`);
+            
+            return { striker, nonStriker };
+        };
+        
+        window.showBattingLineup = () => {
+            console.log('🏏 Complete Batting Lineup:');
+            console.log('=====================================');
+            
+            game.battingTeam.players.forEach((player, index) => {
+                let status = '';
+                if (index === game.battingTeam.currentBatsman) {
+                    status = '🔥 ON STRIKE';
+                } else if (index === game.battingTeam.currentPartner) {
+                    status = '⚡ NON-STRIKER';
+                } else if (player.isOut) {
+                    status = `❌ OUT (${player.dismissal})`;
+                } else {
+                    status = '⏳ WAITING';
+                }
+                
+                console.log(`${index + 1}. ${player.name}: ${player.runs} runs (${player.ballsFaced} balls) - ${status}`);
+            });
+            
+            const wicketsDown = game.battingTeam.players.filter(p => p.isOut).length;
+            console.log(`\n📊 Summary: ${game.cricketScore.runs}/${wicketsDown} (${game.cricketScore.overs.toFixed(1)} overs)`);
+        };
+        
+        window.setTeamName = (name) => {
+            game.battingTeam.teamName = name;
+            if (game.scorecardUI.isVisible) {
+                game.updateScorecardDisplay();
+            }
+            console.log(`🏏 Team name set to: ${name}`);
+        };
+        
+        window.testBatsmanPromotion = () => {
+            console.log('🧪 TESTING BATSMAN PROMOTION SYSTEM');
+            console.log('====================================');
+            
+            // Reset to start
+            window.resetTeamStats();
+            
+            console.log('\n1️⃣ Initial lineup:');
+            window.showBattingLineup();
+            
+            // Score some runs with first batsman
+            console.log('\n2️⃣ A Cook scores 15 runs...');
+            for (let i = 0; i < 3; i++) {
+                game.startNewBall();
+                game.ballState.runsThisBall = 5;
+                game.doCompleteBall();
+            }
+            window.getCurrentBatsman();
+            
+            // First wicket
+            console.log('\n3️⃣ A Cook gets out (caught)...');
+            window.testWicket('caught');
+            console.log('After wicket:');
+            window.showBattingLineup();
+            
+            // Score with new pair
+            console.log('\n4️⃣ Current pair scores 10 runs...');
+            for (let i = 0; i < 2; i++) {
+                game.startNewBall();
+                game.ballState.runsThisBall = 5;
+                game.doCompleteBall();
+            }
+            window.getCurrentBatsman();
+            
+            // Second wicket
+            console.log('\n5️⃣ Another wicket (run out)...');
+            window.testWicket('run out');
+            console.log('After second wicket:');
+            window.showBattingLineup();
+            
+            console.log('\n✅ PROMOTION TEST COMPLETE!');
+            console.log('📊 Check scorecard to see the progression');
+            window.showScorecard();
+        };
+        
         // ✅ NEW: Test the improved fielding system
         window.testImprovedFieldingV3 = () => {
             console.log('🚀 Testing Improved Fielding System v3.0');
@@ -5688,6 +6297,28 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  Catch success depends on distance, speed, and catch type');
         console.log('  ✅ NEW: Dropped catches trigger automatic backup fielding!');
         console.log('  ✅ NEW: Realistic catch attempts - only tries catches with ≥20% probability!');
+        console.log('📊 Scorecard System:');
+        console.log('  demoScorecardSystem() - 🆕 COMPLETE DEMO of the scorecard system!');
+        console.log('  testBatsmanPromotion() - 🆕 TEST batsman promotion after wickets!');
+        console.log('  showScorecard() - display full team scorecard');
+        console.log('  hideScorecard() - hide the scorecard');
+        console.log('  updateScorecard() - manually refresh scorecard display');
+        console.log('  resetTeamStats() - reset all player stats to 0');
+        console.log('  simulateInnings() - load a realistic sample innings');
+        console.log('  testWicket("caught/run out/bowled") - test wicket recording');
+        console.log('  testBoundary(4 or 6) - test boundary scoring');
+        console.log('  getCurrentBatsman() - show current batsmen details');
+        console.log('  showBattingLineup() - show complete batting order and status');
+        console.log('  setTeamName("Team Name") - change team name');
+        console.log('  📊 BUTTON: Click "📊 Scorecard" button in bottom-right during gameplay!');
+        console.log('Features:');
+        console.log('  ✅ 11-player England batting team with realistic names');
+        console.log('  ✅ Tracks individual runs, balls faced, dismissal type');
+        console.log('  ✅ Highlights current batsmen (striker/non-striker)');
+        console.log('  ✅ Automatic batsman rotation on dismissals and odd runs');
+        console.log('  ✅ Extras tracking (byes, leg-byes, wides, no-balls)');
+        console.log('  ✅ Professional scorecard layout matching real cricket');
+        console.log('  ✅ Real-time updates during gameplay');
         
         // ✅ NEW: Test the improved fielding system
         window.testImprovedFieldingV4 = () => {
@@ -5903,6 +6534,59 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(`   Realistic behavior: ${attempters === 0 && scenario === 'impossible' ? '✅ Perfect!' : attempters > 0 ? '✅ Some will try' : '⚠️ None will try'}`);
         };
         
+        // ✅ NEW: Demo the complete scorecard system
+        window.demoScorecardSystem = () => {
+            console.log('🏏 SCORECARD SYSTEM DEMO');
+            console.log('========================');
+            console.log('');
+            console.log('🎯 This demonstrates the full batting team and scorecard system:');
+            console.log('');
+            
+            // Show initial state
+            console.log('1️⃣ Initial State:');
+            window.resetTeamStats();
+            window.getCurrentBatsman();
+            
+            console.log('');
+            console.log('2️⃣ Simulating some gameplay:');
+            
+            // Simulate a few balls
+            console.log('   📍 Ball 1: Boundary (4 runs)');
+            window.testBoundary(4);
+            
+            console.log('   📍 Ball 2: Single (1 run - batsmen swap)');
+            game.startNewBall();
+            game.ballState.runsThisBall = 1;
+            game.doCompleteBall();
+            
+            console.log('   📍 Ball 3: Wicket!');
+            window.testWicket('caught');
+            
+            console.log('');
+            console.log('3️⃣ Current State After Wicket:');
+            window.getCurrentBatsman();
+            window.showBattingLineup();
+            
+            console.log('');
+            console.log('4️⃣ Load Sample Full Innings:');
+            window.simulateInnings();
+            
+            console.log('');
+            console.log('5️⃣ View Scorecard:');
+            window.showScorecard();
+            
+            console.log('');
+            console.log('✅ DEMO COMPLETE!');
+            console.log('📊 The scorecard should now be visible on screen');
+            console.log('🎮 You can also click the "📊 Scorecard" button in bottom-right anytime during gameplay');
+            console.log('');
+            console.log('🧪 Try these commands:');
+            console.log('  • bowlStraight() then playCoverDrive() - hit ball and score runs');
+            console.log('  • testWicket("run out") - simulate different dismissal types'); 
+            console.log('  • setTeamName("Your Team") - customize team name');
+            console.log('  • hideScorecard() / showScorecard() - toggle display');
+        };
+
         // ✅ NEW: Quick demo of probability threshold in action
         window.demoCatchProbabilityThreshold = () => {
             console.log('🚀 QUICK DEMO: Realistic Catch Probability System');
