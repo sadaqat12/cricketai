@@ -1900,96 +1900,60 @@ class CricketGame {
             return;
         }
         
-        console.log('🎯 Assigning fielder based on interception analysis...');
+        console.log('🎯 Assigning closest fielder to ball landing...');
         
-        // Find the best fielder using interception system
-        const bestFielder = this.findBestFielderForIntercept();
-        if (bestFielder) {
-            const interceptionData = bestFielder.userData.interceptionData;
-            
-            this.fieldingSystem.nearestFielder = bestFielder;
-            this.fieldingSystem.chasingFielder = bestFielder;
-            
-            if (interceptionData && interceptionData.isCatchable) {
-                // This is a catch opportunity - start interception
-                console.log(`🥎 ${bestFielder.userData.description} will attempt interception catch!`);
-                this.startInterceptionCatch(bestFielder, interceptionData);
-            } else {
-                // This is ground fielding - chase to position
-                console.log(`🏃 ${bestFielder.userData.description} will chase for ground fielding!`);
-                this.fieldingSystem.fielderStates.set(bestFielder.userData.description, 'chasing');
-                this.startFielderChasing(bestFielder);
-            }
-        } else {
-            console.log('⚠️ No fielders available for ball');
+        // SIMPLE APPROACH: Find closest fielder to where ball will land
+        const landingPosition = this.predictBallLanding();
+        if (!landingPosition) {
+            console.log('❌ Could not predict ball landing position');
+            return;
         }
-    }
-
-    findBestFielderForIntercept() {
-        if (!this.cricketBall || this.fielders.length === 0) return null;
         
-        console.log('🔍 Finding best fielder for ball interception...');
+        let closestFielder = null;
+        let closestDistance = Infinity;
         
-        let bestFielder = null;
-        let bestInterception = null;
-        let bestScore = Infinity;
-        
-        // Evaluate each fielder's interception capability
+        // Find the fielder closest to the landing position
         this.fielders.forEach(fielder => {
-            const interception = this.calculateBallInterception(fielder);
+            if (this.fieldingSystem.fielderStates.get(fielder.userData.description) !== 'idle') {
+                return; // Skip busy fielders
+            }
             
-            if (interception) {
-                // Score based on difficulty and distance (lower is better)
-                const score = interception.fielderDistance + (interception.catchDifficulty * 10);
-                
-                console.log(`📊 ${fielder.userData.description} score: ${score.toFixed(1)} (distance: ${interception.fielderDistance.toFixed(1)}m, difficulty: ${interception.catchDifficulty.toFixed(2)})`);
-                
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestFielder = fielder;
-                    bestInterception = interception;
-                }
+            const distance = fielder.position.distanceTo(landingPosition);
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestFielder = fielder;
             }
         });
         
-        if (bestFielder && bestInterception) {
-            console.log(`🏆 BEST INTERCEPTOR: ${bestFielder.userData.description}`);
-            console.log(`   📍 Intercept point: (${bestInterception.interceptPoint.x.toFixed(1)}, ${bestInterception.interceptPoint.z.toFixed(1)})`);
-            console.log(`   ⏱️ Travel time: ${bestInterception.fielderTravelTime.toFixed(1)}s, Time margin: ${bestInterception.timeMargin.toFixed(1)}s`);
-            console.log(`   🎯 Action: ${bestInterception.isCatchable ? 'CATCH ATTEMPT' : 'GROUND FIELDING'}`);
+        if (closestFielder) {
+            console.log(`🏆 ${closestFielder.userData.description} is closest to landing position (${closestDistance.toFixed(1)}m away)`);
+            console.log(`📍 Landing position: (${landingPosition.x.toFixed(1)}, ${landingPosition.z.toFixed(1)})`);
             
-            // Store interception data for use in fielding
-            bestFielder.userData.interceptionData = bestInterception;
+            this.fieldingSystem.nearestFielder = closestFielder;
+            this.fieldingSystem.chasingFielder = closestFielder;
             
-            return bestFielder;
-        }
-        
-        console.log('❌ No fielder can intercept the ball effectively');
-        
-        // Fallback: find fielder closest to landing spot for ground fielding
-        const predictedLanding = this.predictBallLanding();
-        if (predictedLanding) {
-            let fallbackFielder = null;
-            let minDistance = Infinity;
+            // Set target position for fielder
+            closestFielder.userData.targetPosition = landingPosition.clone();
             
-            this.fielders.forEach(fielder => {
-                const distance = fielder.position.distanceTo(predictedLanding);
-                if (distance < minDistance) {
-                    minDistance = distance;
-                    fallbackFielder = fielder;
-                }
-            });
+            // Determine if this could be a catch (ball in air) or ground fielding
+            const ballHeight = this.cricketBall.position.y;
+            const ballSpeed = this.ballPhysics.velocity.length();
             
-            if (fallbackFielder) {
-                console.log(`🔄 FALLBACK: ${fallbackFielder.userData.description} will field at landing (${minDistance.toFixed(1)}m away)`);
-                // Clear any interception data for fallback fielding
-                fallbackFielder.userData.interceptionData = null;
-                return fallbackFielder;
+            if (ballHeight > 1.0 && ballSpeed > 5.0) {
+                console.log(`🥎 ${closestFielder.userData.description} will attempt to intercept for catch!`);
+                this.fieldingSystem.fielderStates.set(closestFielder.userData.description, 'intercepting');
+                this.startDirectIntercept(closestFielder, landingPosition);
+            } else {
+                console.log(`🏃 ${closestFielder.userData.description} will chase for ground fielding!`);
+                this.fieldingSystem.fielderStates.set(closestFielder.userData.description, 'chasing');
+                this.startFielderChasing(closestFielder);
             }
+        } else {
+            console.log('⚠️ No idle fielders available');
         }
-        
-        return null;
     }
+
+
 
 
 
@@ -2022,96 +1986,7 @@ class CricketGame {
         return Math.max(0, Math.max(t1, t2));
     }
 
-    calculateBallInterception(fielder) {
-        if (!this.cricketBall || !this.ballPhysics.isMoving || !fielder) {
-            return null;
-        }
 
-        const ballPos = this.cricketBall.position.clone();
-        const ballVel = this.ballPhysics.velocity.clone();
-        const fielderPos = fielder.position.clone();
-        const fielderSpeed = 8.0; // meters per second
-        const gravity = this.ballPhysics.gravity;
-
-        console.log(`🧮 Calculating interception for ${fielder.userData.description}:`);
-        console.log(`   Ball: (${ballPos.x.toFixed(1)}, ${ballPos.y.toFixed(1)}, ${ballPos.z.toFixed(1)})`);
-        console.log(`   Ball velocity: (${ballVel.x.toFixed(1)}, ${ballVel.y.toFixed(1)}, ${ballVel.z.toFixed(1)})`);
-        console.log(`   Fielder: (${fielderPos.x.toFixed(1)}, ${fielderPos.z.toFixed(1)})`);
-
-        // Try different time intervals to find optimal interception point
-        let bestResult = null;
-        let minEffort = Infinity;
-
-        // Check interception possibilities from 0.1 to 5 seconds
-        for (let t = 0.1; t <= 5.0; t += 0.1) {
-            // Calculate ball position at time t
-            const ballX = ballPos.x + ballVel.x * t;
-            const ballY = ballPos.y + ballVel.y * t + 0.5 * gravity * t * t;
-            const ballZ = ballPos.z + ballVel.z * t;
-
-            // Skip if ball has hit ground
-            if (ballY <= 0.035) continue;
-
-            // Skip if ball is too high or too low for catching
-            if (ballY < 0.5 || ballY > 3.5) continue;
-
-            const interceptPoint = new THREE.Vector3(ballX, ballY, ballZ);
-
-            // Calculate distance fielder needs to travel
-            const fielderDistance = fielderPos.distanceTo(new THREE.Vector3(ballX, 0, ballZ));
-            const fielderTime = fielderDistance / fielderSpeed;
-
-            // Check if fielder can reach this point in time
-            if (fielderTime <= t) {
-                // Calculate "effort" - combination of distance and timing
-                const timeMargin = t - fielderTime;
-                const effort = fielderDistance + (timeMargin < 0.5 ? 10 : 0); // Penalty for tight timing
-
-                if (effort < minEffort) {
-                    minEffort = effort;
-                    bestResult = {
-                        interceptPoint: interceptPoint,
-                        timeToIntercept: t,
-                        fielderTravelTime: fielderTime,
-                        fielderDistance: fielderDistance,
-                        timeMargin: timeMargin,
-                        isCatchable: ballY >= 0.5 && ballY <= 3.0,
-                        catchDifficulty: this.calculateCatchDifficulty(fielderDistance, ballVel.length(), ballY)
-                    };
-                }
-            }
-        }
-
-        if (bestResult) {
-            console.log(`   ✅ Interception possible:`);
-            console.log(`      Point: (${bestResult.interceptPoint.x.toFixed(1)}, ${bestResult.interceptPoint.y.toFixed(1)}, ${bestResult.interceptPoint.z.toFixed(1)})`);
-            console.log(`      Fielder travel: ${bestResult.fielderDistance.toFixed(1)}m in ${bestResult.fielderTravelTime.toFixed(1)}s`);
-            console.log(`      Time margin: ${bestResult.timeMargin.toFixed(1)}s`);
-            console.log(`      Catchable: ${bestResult.isCatchable}, Difficulty: ${bestResult.catchDifficulty.toFixed(2)}`);
-        } else {
-            console.log(`   ❌ No viable interception point found`);
-        }
-
-        return bestResult;
-    }
-
-    calculateCatchDifficulty(distance, ballSpeed, ballHeight) {
-        // Calculate catch difficulty from 0 (easy) to 1 (impossible)
-        let difficulty = 0;
-
-        // Distance factor (0-1 based on 0-5 meter range)
-        difficulty += Math.min(distance / 5.0, 1.0) * 0.4;
-
-        // Speed factor (0-1 based on 0-30 speed range)  
-        difficulty += Math.min(ballSpeed / 30.0, 1.0) * 0.4;
-
-        // Height factor (optimal at 1.5m, harder at extremes)
-        const optimalHeight = 1.5;
-        const heightDiff = Math.abs(ballHeight - optimalHeight);
-        difficulty += Math.min(heightDiff / 2.0, 1.0) * 0.2;
-
-        return Math.min(difficulty, 1.0);
-    }
 
     predictBallLanding() {
         if (!this.cricketBall || !this.ballPhysics.isMoving) return null;
@@ -2138,45 +2013,57 @@ class CricketGame {
         const timeToLand = Math.max(t1, t2);
         if (timeToLand <= 0) return null;
         
-        // Calculate landing position
-        const landingX = currentPos.x + velocity.x * timeToLand;
-        const landingZ = currentPos.z + velocity.z * timeToLand;
+        // Calculate landing position with improved friction modeling
+        // Use a more realistic friction decay that considers bounce effects
+        let effectiveTimeToLand = timeToLand;
         
-        // Apply friction effect over time (ball slows down)
-        const frictionFactor = Math.pow(this.ballPhysics.friction, timeToLand * 10);
-        const adjustedX = currentPos.x + velocity.x * timeToLand * frictionFactor;
-        const adjustedZ = currentPos.z + velocity.z * timeToLand * frictionFactor;
+        // For high balls, reduce the effective time slightly to account for fielder reaction
+        if (currentPos.y > 3.0) {
+            effectiveTimeToLand *= 0.9; // Account for fielder positioning time
+        }
         
-        return new THREE.Vector3(adjustedX, targetHeight, adjustedZ);
+        // Apply gradual friction effect over time
+        const frictionFactor = Math.pow(this.ballPhysics.friction, effectiveTimeToLand * 8);
+        const adjustedX = currentPos.x + velocity.x * effectiveTimeToLand * frictionFactor;
+        const adjustedZ = currentPos.z + velocity.z * effectiveTimeToLand * frictionFactor;
+        
+        // Add small prediction uncertainty to make it more realistic
+        const uncertainty = 0.5; // 0.5m uncertainty
+        const uncertaintyX = (Math.random() - 0.5) * uncertainty;
+        const uncertaintyZ = (Math.random() - 0.5) * uncertainty;
+        
+        return new THREE.Vector3(
+            adjustedX + uncertaintyX, 
+            targetHeight, 
+            adjustedZ + uncertaintyZ
+        );
     }
 
 
 
-    startInterceptionCatch(fielder, interceptionData) {
-        if (!fielder || !interceptionData) return;
+    startDirectIntercept(fielder, targetPosition) {
+        if (!fielder || !targetPosition) return;
         
-        console.log(`🎯 ${fielder.userData.description} starting interception run to catch!`);
-        console.log(`   Target: (${interceptionData.interceptPoint.x.toFixed(1)}, ${interceptionData.interceptPoint.z.toFixed(1)})`);
+        console.log(`🎯 ${fielder.userData.description} running to intercept ball at landing position!`);
+        console.log(`   Target: (${targetPosition.x.toFixed(1)}, ${targetPosition.z.toFixed(1)})`);
         
         // Set fielder state to intercepting
         this.fieldingSystem.fielderStates.set(fielder.userData.description, 'intercepting');
         this.fieldingSystem.catchingSystem.catchInProgress = true;
         this.fieldingSystem.catchingSystem.catchingFielder = fielder;
         
-        // Store interception target and timing
-        fielder.userData.interceptTarget = interceptionData.interceptPoint.clone();
+        // Store simple target position
+        fielder.userData.interceptTarget = targetPosition.clone();
         fielder.userData.interceptStartTime = Date.now();
-        fielder.userData.interceptTravelTime = interceptionData.fielderTravelTime * 1000; // Convert to milliseconds
-        fielder.userData.interceptArrivalTime = Date.now() + (interceptionData.fielderTravelTime * 1000);
         
-        // Load running animation for the dash to interception point
+        // Load running animation
         if (!fielder.userData.animations || !fielder.userData.animations.has('runningcharacter')) {
             this.loadCharacterAnimation(fielder, 'runningcharacter.fbx', fielder.userData.description);
         }
         
         this.waitForAnimationAndPlay(fielder, 'runningcharacter', true);
         
-        console.log(`⏱️ ${fielder.userData.description} has ${interceptionData.fielderTravelTime.toFixed(1)}s to reach interception point`);
+        console.log(`🏃 ${fielder.userData.description} running to landing position for direct intercept!`);
     }
 
     startFielderChasing(fielder) {
@@ -2220,73 +2107,90 @@ class CricketGame {
     updateFielderIntercepting(fielder, deltaTime) {
         if (!fielder.userData.interceptTarget) return;
         
-        const currentTime = Date.now();
         const targetPosition = fielder.userData.interceptTarget;
-        const arrivalTime = fielder.userData.interceptArrivalTime;
+        const ballPosition = this.cricketBall.position;
         
-        // Calculate direction to interception point
+        // Calculate direction to target position
         const direction = targetPosition.clone().sub(fielder.position);
         direction.y = 0; // Keep fielder on ground
         const distanceToTarget = direction.length();
         
-        // Check if fielder has reached the interception point
-        if (distanceToTarget < 0.5) {
-            console.log(`🎯 ${fielder.userData.description} reached interception point!`);
-            this.executeInterceptionCatch(fielder);
+        // Calculate distance to ball
+        const distanceToBall = fielder.position.distanceTo(ballPosition);
+        
+        // Check if fielder should attempt catch/pickup
+        const shouldAttemptCatch = (
+            distanceToTarget < 2.0 ||  // Close to target position
+            distanceToBall < 3.0 ||    // Close to ball
+            ballPosition.y <= 1.0     // Ball is low (near ground)
+        );
+        
+        if (shouldAttemptCatch) {
+            console.log(`🎯 ${fielder.userData.description} attempting catch/pickup at target position!`);
+            console.log(`   Distance to target: ${distanceToTarget.toFixed(1)}m, Distance to ball: ${distanceToBall.toFixed(1)}m`);
+            this.executeDirectCatch(fielder);
             return;
         }
         
-        // Check if we're at the expected arrival time (catch the ball even if not at exact position)
-        if (currentTime >= arrivalTime) {
-            console.log(`⏰ ${fielder.userData.description} interception time reached! Attempting catch...`);
-            this.executeInterceptionCatch(fielder);
-            return;
+        // Move fielder towards target position
+        if (distanceToTarget > 0.5) {
+            direction.normalize();
+            const moveSpeed = 10; // Faster speed for more responsive movement
+            
+            fielder.position.add(direction.multiplyScalar(moveSpeed * deltaTime));
+            
+            // Make fielder face the direction they're moving
+            const lookAtPosition = fielder.position.clone().add(direction);
+            lookAtPosition.y = fielder.position.y;
+            fielder.lookAt(lookAtPosition);
         }
         
-        // Move fielder towards interception point
-        direction.normalize();
-        const moveSpeed = 8; // Fielder movement speed
-        
-        fielder.position.add(direction.multiplyScalar(moveSpeed * deltaTime));
-        
-        // Make fielder face the target
-        const lookAtPosition = targetPosition.clone();
-        lookAtPosition.y = fielder.position.y;
-        fielder.lookAt(lookAtPosition);
-        
-        // Safety timeout (5 seconds max for interception)
-        const interceptDuration = currentTime - fielder.userData.interceptStartTime;
-        if (interceptDuration > 5000) {
-            console.log(`⏰ ${fielder.userData.description} interception timeout - executing catch anyway`);
-            this.executeInterceptionCatch(fielder);
+        // Safety timeout (8 seconds max)
+        const interceptDuration = Date.now() - fielder.userData.interceptStartTime;
+        if (interceptDuration > 8000) {
+            console.log(`⏰ ${fielder.userData.description} timeout - executing catch anyway`);
+            this.executeDirectCatch(fielder);
         }
     }
 
-    executeInterceptionCatch(fielder) {
+    executeDirectCatch(fielder) {
         if (!fielder || !this.cricketBall) return;
         
-        console.log(`🥎 ${fielder.userData.description} executing interception catch!`);
+        console.log(`🥎 ${fielder.userData.description} executing direct catch/pickup!`);
         
-        // Calculate actual distance to ball for catch difficulty
+        // Calculate distance to ball
         const ballPosition = this.cricketBall.position;
         const fielderPosition = fielder.position;
-        const actualDistance = ballPosition.distanceTo(fielderPosition);
+        const distance = ballPosition.distanceTo(fielderPosition);
         
-        console.log(`📏 Actual catch distance: ${actualDistance.toFixed(1)}m`);
+        console.log(`📏 Distance to ball: ${distance.toFixed(1)}m, Ball height: ${ballPosition.y.toFixed(1)}m`);
         
-        // Determine catch type based on distance
-        const regularRadius = this.fieldingSystem.catchingSystem.regularCatchRadius;
-        const divingRadius = this.fieldingSystem.catchingSystem.divingCatchRadius;
+        // If ball is on ground and close, just pick it up immediately
+        if (ballPosition.y <= 0.5 && distance <= 2.0) {
+            console.log(`⚡ Immediate pickup! Ball is on ground and close`);
+            this.attemptImmediatePickup(fielder, distance);
+            return;
+        }
         
+        // Safety check: If ball is too far away, don't attempt catch - just field it
+        const maxCatchDistance = this.fieldingSystem.catchingSystem.catchRadius + 2.0; // 7m max
+        if (distance > maxCatchDistance) {
+            console.log(`❌ Ball too far for catch attempt (${distance.toFixed(1)}m > ${maxCatchDistance}m) - switching to field mode`);
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'chasing');
+            this.updateFielderChasing(fielder, 0.016); // Call once to start chase
+            return;
+        }
+        
+        // Otherwise attempt a catch
         let catchType = 'regularcatch';
         let catchAnimation = 'regularcatch.fbx';
         
-        if (actualDistance > divingRadius) {
+        if (distance > 3.0) {
             catchType = 'divingcatch';
             catchAnimation = 'divingcatch.fbx';
-            console.log(`🤸‍♂️ ${fielder.userData.description} going for a diving interception catch!`);
+            console.log(`🤸‍♂️ ${fielder.userData.description} going for a diving catch! (${distance.toFixed(1)}m away)`);
         } else {
-            console.log(`✋ ${fielder.userData.description} going for a regular interception catch!`);
+            console.log(`✋ ${fielder.userData.description} going for a regular catch! (${distance.toFixed(1)}m away)`);
         }
         
         // Set fielder state to catching
@@ -2298,9 +2202,9 @@ class CricketGame {
         setTimeout(() => {
             this.playCricketPlayerAnimation(fielder, catchType);
             
-            // Resolve catch based on actual execution
+            // Resolve catch based on distance and difficulty
             setTimeout(() => {
-                this.resolveCatch(fielder, actualDistance, catchType);
+                this.resolveCatch(fielder, distance, catchType);
             }, 800);
             
         }, 100);
@@ -2308,8 +2212,6 @@ class CricketGame {
         // Clear interception data
         fielder.userData.interceptTarget = null;
         fielder.userData.interceptStartTime = null;
-        fielder.userData.interceptTravelTime = null;
-        fielder.userData.interceptArrivalTime = null;
     }
 
     updateFielderChasing(fielder, deltaTime) {
@@ -2317,40 +2219,51 @@ class CricketGame {
         
         const ballPosition = this.cricketBall.position;
         
-        // Calculate direction from fielder to ball
-        const direction = ballPosition.clone().sub(fielder.position);
-        direction.y = 0; // Keep fielder on ground
-        const distance = direction.length();
+        // If fielder has a target position (from the prediction), chase that instead of the ball directly
+        const targetPosition = fielder.userData.targetPosition || ballPosition;
         
-        // If fielder is close enough to the ball, stop and throw
-        if (distance < 2.5 && this.ballPhysics.velocity.length() < 0.5) {
+        // Calculate direction from fielder to target
+        const direction = targetPosition.clone().sub(fielder.position);
+        direction.y = 0; // Keep fielder on ground
+        const distanceToTarget = direction.length();
+        const distanceToBall = fielder.position.distanceTo(ballPosition);
+        
+        // If fielder is close enough to the ball, stop and field it
+        if (distanceToBall < 2.5 && this.ballPhysics.velocity.length() < 0.5) {
+            console.log(`🤲 ${fielder.userData.description} reached ball position for pickup`);
             this.fielderReachBall(fielder);
             return;
         }
         
-        // Move fielder towards ball if ball is still moving or if fielder is far from ball
-        // Fixed: Always allow movement toward ball when distance > 1.0, regardless of ball movement
-        if (this.ballPhysics.isMoving || distance > 1.0) {
+        // If ball is on ground and fielder is close, pick it up immediately
+        if (ballPosition.y <= 0.5 && distanceToBall <= 2.0) {
+            console.log(`⚡ ${fielder.userData.description} close to ground ball - immediate pickup`);
+            this.attemptImmediatePickup(fielder, distanceToBall);
+            return;
+        }
+        
+        // Move fielder towards target position
+        if (distanceToTarget > 0.5) {
             direction.normalize();
-            const moveSpeed = 8; // Fielder movement speed
+            const moveSpeed = 10; // Faster speed for more responsive movement
             
-            // Move fielder towards ball
+            // Move fielder towards target
             fielder.position.add(direction.multiplyScalar(moveSpeed * deltaTime));
             
-            // Make fielder face the ball
-            const lookAtPosition = ballPosition.clone();
-            lookAtPosition.y = fielder.position.y; // Same height for proper facing
+            // Make fielder face the direction they're moving
+            const lookAtPosition = fielder.position.clone().add(direction);
+            lookAtPosition.y = fielder.position.y;
             fielder.lookAt(lookAtPosition);
         }
         
-        // Safety mechanism: If fielder has been chasing for too long without progress, complete the ball
+        // Safety mechanism: If fielder has been chasing for too long, complete the ball
         if (!fielder.userData.chaseStartTime) {
             fielder.userData.chaseStartTime = Date.now();
         }
         
         const chaseDuration = Date.now() - fielder.userData.chaseStartTime;
-        if (chaseDuration > 10000) { // 10 seconds timeout
-            console.log(`⏰ ${fielder.userData.description} chase timeout - completing ball to prevent infinite loop`);
+        if (chaseDuration > 8000) { // 8 seconds timeout
+            console.log(`⏰ ${fielder.userData.description} chase timeout - fielding ball anyway`);
             this.fielderReachBall(fielder);
             fielder.userData.chaseStartTime = null;
         }
@@ -2641,44 +2554,15 @@ class CricketGame {
 
     // Update fielder positions based on ball trajectory prediction
     updatePredictiveFielding() {
-        if (!this.cricketBall || !this.ballPhysics.isMoving || 
-            this.fieldingSystem.catchingSystem.catchInProgress ||
-            this.fieldingSystem.chasingFielder) {
-            return;
-        }
-
-        // Don't run predictive fielding if we have an active fielder or catch in progress
-        const isAnyFielderActive = Array.from(this.fieldingSystem.fielderStates.values()).some(state => 
-            state === 'chasing' || state === 'throwing' || state === 'catching'
-        );
+        // DISABLED: This was causing multiple fielders to run in place
+        // The new simplified system only uses one fielder at a time
+        return;
         
-        if (isAnyFielderActive) {
-            return; // A fielder is already handling the ball - don't activate others
-        }
-
-        const anticipationTime = this.fieldingSystem.catchingSystem.anticipationTime;
-        const predictiveRange = this.fieldingSystem.catchingSystem.predictiveRange;
-
-        this.fielders.forEach(fielder => {
-            const fielderState = this.fieldingSystem.fielderStates.get(fielder.userData.description);
-            
-            // Only move idle fielders
-            if (fielderState !== 'idle') {
-                return;
-            }
-
-            const intercept = this.calculateInterceptPoint(fielder, anticipationTime);
-            const distanceToIntercept = fielder.position.distanceTo(intercept.position);
-            
-            // Only move if the intercept point is within predictive range and fielder can help
-            if (distanceToIntercept <= predictiveRange && intercept.canReach) {
-                // Start moving fielder toward intercept point
-                this.fieldingSystem.fielderStates.set(fielder.userData.description, 'anticipating');
-                this.moveFielderToPosition(fielder, intercept.position);
-                
-                console.log(`🔮 ${fielder.userData.description} moving to intercept ball (${distanceToIntercept.toFixed(1)}m away)`);
-            }
-        });
+        // The old predictive system caused issues:
+        // - Multiple fielders moving at once 
+        // - Fielders running in place
+        // - Conflicts with the main chaser
+        // Now we rely on immediate pickup and single chaser assignment
     }
 
     // Move fielder toward a target position
@@ -2723,34 +2607,39 @@ class CricketGame {
     }
 
     checkForImmediatePickup() {
-        // Only check for immediate pickups (balls on ground very close to fielders)
-        // Interception catches are now handled by the assignFielderIfNeeded system
+        // HIGH PRIORITY: Check for immediate pickups first - this overrides everything else
         if (this.fieldingSystem.catchingSystem.catchInProgress || 
-            !this.fieldingSystem.ballIsHit || 
-            this.fieldingSystem.chasingFielder) {
+            !this.fieldingSystem.ballIsHit) {
             return;
         }
 
         const ballPos = this.cricketBall.position;
-        const immediatePickupRadius = 1.5; // 1.5 meters for immediate pickup
+        const immediatePickupRadius = 2.0; // Increased to 2 meters for more generous pickup
         
-        // Only check if ball is on ground and moving slowly
-        if (ballPos.y >= 0.5 || this.ballPhysics.velocity.length() > 3.0) {
-            return;
-        }
-
-        // Check each fielder for immediate pickup opportunities
+        // Check for immediate pickup regardless of ball height or speed
+        // Any fielder very close to the ball should pick it up
         this.fielders.forEach(fielder => {
-            if (this.fieldingSystem.fielderStates.get(fielder.userData.description) !== 'idle') {
-                return; // Skip fielders that are busy
+            // Allow immediate pickup even for chasing fielders - they might be close now
+            const fielderState = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+            if (fielderState === 'throwing' || fielderState === 'catching') {
+                return; // Skip only if they're already handling ball
             }
 
             const fielderPos = fielder.position;
             const distance = ballPos.distanceTo(fielderPos);
             
-            // Check for immediate pickup (ball on ground, very close to fielder)
+            // Check for immediate pickup (any ball very close to any fielder)
             if (distance <= immediatePickupRadius) {
-                console.log(`⚡ Immediate pickup opportunity! ${fielder.userData.description} is ${distance.toFixed(1)}m from ball on ground`);
+                console.log(`⚡ IMMEDIATE PICKUP! ${fielder.userData.description} is ${distance.toFixed(1)}m from ball - taking over!`);
+                console.log(`   Ball height: ${ballPos.y.toFixed(1)}m, Ball speed: ${this.ballPhysics.velocity.length().toFixed(1)}`);
+                
+                // Clear any existing chaser - this fielder is taking over
+                if (this.fieldingSystem.chasingFielder && this.fieldingSystem.chasingFielder !== fielder) {
+                    console.log(`   Clearing previous chaser: ${this.fieldingSystem.chasingFielder.userData.description}`);
+                    this.fieldingSystem.fielderStates.set(this.fieldingSystem.chasingFielder.userData.description, 'idle');
+                }
+                
+                this.fieldingSystem.chasingFielder = fielder;
                 this.attemptImmediatePickup(fielder, distance);
                 return;
             }
@@ -2836,9 +2725,9 @@ class CricketGame {
         // Calculate catch success probability
         let catchProbability = 1.0; // Start with 100% success
         
-        // Reduce probability based on distance
+        // Reduce probability based on distance (ensure it never goes negative)
         const maxDistance = this.fieldingSystem.catchingSystem.catchRadius;
-        const distanceFactor = 1 - (distance / maxDistance);
+        const distanceFactor = Math.max(0, 1 - (distance / maxDistance));
         catchProbability *= distanceFactor;
         
         // Reduce probability based on ball speed
@@ -2849,6 +2738,9 @@ class CricketGame {
         if (catchType === 'divingcatch') {
             catchProbability *= 0.7; // 30% harder for diving catches
         }
+        
+        // Ensure probability is always between 0 and 1
+        catchProbability = Math.max(0, Math.min(1, catchProbability));
         
         // Determine success
         const isSuccessful = Math.random() < catchProbability;
@@ -2951,14 +2843,12 @@ class CricketGame {
                 // Reset state to idle
                 this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
                 
-                // Clear all animation and interception flags
+                // Clear all fielding data
                 fielder.userData.isRunningForAnticipation = false;
                 fielder.userData.chaseStartTime = null;
                 fielder.userData.interceptTarget = null;
                 fielder.userData.interceptStartTime = null;
-                fielder.userData.interceptTravelTime = null;
-                fielder.userData.interceptArrivalTime = null;
-                fielder.userData.interceptionData = null;
+                fielder.userData.targetPosition = null;
                 
                 // Move fielder back to original position
                 const originalPos = this.fieldingSystem.fielderOriginalPositions.get(fielder.userData.description);
@@ -3190,9 +3080,12 @@ class CricketGame {
                     fielder.rotation.set(0, 0, 0);
                     fielder.lookAt(0, 0, 5); // Face batsman
                     
-                    // Clear all animation flags
+                    // Clear all fielding flags
                     fielder.userData.isRunningForAnticipation = false;
                     fielder.userData.chaseStartTime = null;
+                    fielder.userData.interceptTarget = null;
+                    fielder.userData.interceptStartTime = null;
+                    fielder.userData.targetPosition = null;
                     
                     this.playCricketPlayerAnimation(fielder, 'standingidle');
                 }
@@ -3389,6 +3282,12 @@ class CricketGame {
         // Only allow running if not already running and not in middle of swing
         if (this.runningSystem.isRunning || this.batSwing.isSwinging) {
             console.log('❌ Cannot start run - already running or swinging');
+            return false;
+        }
+        
+        // PREVENT running if a catch attempt is in progress
+        if (this.fieldingSystem.catchingSystem.catchInProgress) {
+            console.log('❌ Cannot run - catch attempt in progress!');
             return false;
         }
 
@@ -4686,33 +4585,79 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('👁️ 3D scoreboards shown');
         };
         
-        // Expose fielding system for testing
-        window.testFieldingSystem = () => {
-            console.log('🧪 Testing fielding system...');
-            console.log('Ball is hit:', game.fieldingSystem.ballIsHit);
-            console.log('Ball is moving:', game.ballPhysics.isMoving);
-            console.log('Ball velocity:', game.ballPhysics.velocity.length().toFixed(2));
-            console.log('Fielders available:', game.fielders.length);
+        // Enhanced real-time fielding debug
+        window.debugFieldingLive = () => {
+            if (!game.cricketBall) {
+                console.log('❌ No ball found');
+                return;
+            }
             
-            game.fielders.forEach((fielder, i) => {
+            const ballPos = game.cricketBall.position;
+            const ballVel = game.ballPhysics.velocity;
+            const ballMoving = game.ballPhysics.isMoving;
+            const ballHit = game.fieldingSystem.ballIsHit;
+            
+            console.log('🔍 LIVE FIELDING DEBUG:');
+            console.log(`📍 Ball: (${ballPos.x.toFixed(1)}, ${ballPos.y.toFixed(1)}, ${ballPos.z.toFixed(1)})`);
+            console.log(`⚡ Velocity: (${ballVel.x.toFixed(1)}, ${ballVel.y.toFixed(1)}, ${ballVel.z.toFixed(1)}) Speed: ${ballVel.length().toFixed(1)}`);
+            console.log(`🎯 Ball Status: Moving=${ballMoving}, Hit=${ballHit}`);
+            
+            // Test ball landing prediction
+            const landing = game.predictBallLanding();
+            if (landing) {
+                console.log(`🎯 Predicted landing: (${landing.x.toFixed(1)}, ${landing.z.toFixed(1)})`);
+            } else {
+                console.log('❌ Could not predict landing');
+            }
+            
+            console.log('👥 FIELDER ANALYSIS:');
+            let closestToLanding = null;
+            let closestLandingDist = Infinity;
+            let closestToBall = null;
+            let closestBallDist = Infinity;
+            
+            game.fielders.forEach(fielder => {
+                const pos = fielder.position;
                 const state = game.fieldingSystem.fielderStates.get(fielder.userData.description);
-                const originalPos = game.fieldingSystem.fielderOriginalPositions.get(fielder.userData.description);
-                const ballDistance = game.cricketBall ? fielder.position.distanceTo(game.cricketBall.position).toFixed(1) : 'N/A';
-                const chaseTime = fielder.userData.chaseStartTime ? (Date.now() - fielder.userData.chaseStartTime) : 'N/A';
+                const ballDist = pos.distanceTo(ballPos);
+                const landingDist = landing ? pos.distanceTo(landing) : 'N/A';
                 
-                console.log(`  ${i}: ${fielder.userData.description}`);
-                console.log(`    Current: (${fielder.position.x.toFixed(1)}, ${fielder.position.z.toFixed(1)}) - State: ${state}`);
-                console.log(`    Original: (${originalPos.x.toFixed(1)}, ${originalPos.z.toFixed(1)})`);
-                console.log(`    Distance to ball: ${ballDistance}m, Chase time: ${chaseTime}ms`);
+                console.log(`  ${fielder.userData.description}:`);
+                console.log(`    Position: (${pos.x.toFixed(1)}, ${pos.z.toFixed(1)})`);
+                console.log(`    State: ${state}`);
+                console.log(`    Distance to ball: ${ballDist.toFixed(1)}m`);
+                console.log(`    Distance to landing: ${typeof landingDist === 'number' ? landingDist.toFixed(1) + 'm' : landingDist}`);
+                
+                if (ballDist < closestBallDist) {
+                    closestBallDist = ballDist;
+                    closestToBall = fielder;
+                }
+                
+                if (landing && landingDist < closestLandingDist) {
+                    closestLandingDist = landingDist;
+                    closestToLanding = fielder;
+                }
+                
+                // Check immediate pickup eligibility
+                if (ballDist <= 2.0) {
+                    console.log(`    🚨 IMMEDIATE PICKUP RANGE! (${ballDist.toFixed(1)}m <= 2.0m)`);
+                }
             });
             
-            if (game.cricketBall) {
-                console.log('Ball position:', game.cricketBall.position);
-                const nearest = game.findNearestFielder();
-                if (nearest) {
-                    console.log('Nearest fielder:', nearest.userData.description);
-                }
-            }
+            console.log(`🏆 CLOSEST TO BALL: ${closestToBall ? closestToBall.userData.description : 'None'} (${closestBallDist.toFixed(1)}m)`);
+            console.log(`🎯 CLOSEST TO LANDING: ${closestToLanding ? closestToLanding.userData.description : 'None'} (${closestLandingDist.toFixed(1)}m)`);
+            
+            // Check system states
+            console.log('🔧 SYSTEM STATUS:');
+            console.log(`   Catch in progress: ${game.fieldingSystem.catchingSystem.catchInProgress}`);
+            console.log(`   Chasing fielder: ${game.fieldingSystem.chasingFielder ? game.fieldingSystem.chasingFielder.userData.description : 'None'}`);
+            console.log(`   Nearest fielder: ${game.fieldingSystem.nearestFielder ? game.fieldingSystem.nearestFielder.userData.description : 'None'}`);
+        };
+        
+        // Legacy test function for compatibility
+        window.testFieldingSystem = () => {
+            console.log('🧪 Use debugFieldingLive() for detailed real-time analysis');
+            window.debugFieldingLive();
         };
         
         window.unstuckFielder = (fielderName) => {
@@ -4737,6 +4682,64 @@ document.addEventListener('DOMContentLoaded', () => {
                 game.ballState.completionReason = 'forced';
                 game.completeBall();
             }
+        };
+        
+        window.testImprovedFielding = () => {
+            console.log('🧪 Testing Improved Fielding System');
+            console.log('===================================');
+            
+            // Test catch probability calculation
+            console.log('📊 Testing catch probability calculations:');
+            
+            const testCases = [
+                { distance: 1.0, speed: 10, type: 'regularcatch' },
+                { distance: 3.0, speed: 15, type: 'divingcatch' },
+                { distance: 6.0, speed: 20, type: 'divingcatch' },
+                { distance: 10.0, speed: 25, type: 'divingcatch' }
+            ];
+            
+            testCases.forEach(test => {
+                const maxDistance = game.fieldingSystem.catchingSystem.catchRadius; // 5.0
+                const distanceFactor = Math.max(0, 1 - (test.distance / maxDistance));
+                const speedFactor = Math.max(0.3, 1 - (test.speed / 30));
+                let probability = distanceFactor * speedFactor;
+                
+                if (test.type === 'divingcatch') {
+                    probability *= 0.7;
+                }
+                
+                probability = Math.max(0, Math.min(1, probability));
+                
+                console.log(`  Distance: ${test.distance}m, Speed: ${test.speed}, Type: ${test.type}`);
+                console.log(`    Probability: ${(probability * 100).toFixed(1)}% ✅`);
+            });
+            
+            console.log('');
+            console.log('🎯 Ball prediction accuracy test:');
+            if (game.cricketBall && game.ballPhysics.isMoving) {
+                const prediction = game.predictBallLanding();
+                if (prediction) {
+                    console.log(`  Current ball: (${game.cricketBall.position.x.toFixed(1)}, ${game.cricketBall.position.z.toFixed(1)})`);
+                    console.log(`  Predicted landing: (${prediction.x.toFixed(1)}, ${prediction.z.toFixed(1)})`);
+                } else {
+                    console.log('  ❌ Could not predict landing (ball not moving or invalid trajectory)');
+                }
+            } else {
+                console.log('  ⚠️ Ball not moving - bowl a ball first to test prediction');
+            }
+            
+            console.log('');
+            console.log('🛡️ Safety checks active:');
+            console.log('  ✅ Catch probability clamped to 0-100%');
+            console.log('  ✅ Max catch distance: 7m (5m catchRadius + 2m buffer)');
+            console.log('  ✅ Running blocked during catch attempts');
+            console.log('  ✅ Improved ball landing prediction with uncertainty');
+            
+            console.log('');
+            console.log('🎮 Test commands:');
+            console.log('  bowlStraight() - bowl ball straight');
+            console.log('  playUpperCut() - hit ball to off-side (like your test)');
+            console.log('  debugFieldingLive() - real-time fielding analysis');
         };
         
         window.stopAllFielders = () => {
@@ -4880,7 +4883,8 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  hideScoreboards() - hide both 3D scoreboards');
         console.log('  showScoreboards() - show both 3D scoreboards');
         console.log('Fielding System:');
-        console.log('  testFieldingSystem() - debug fielding system state');
+        console.log('  testImprovedFielding() - test the improved fielding system fixes');
+        console.log('  debugFieldingLive() - real-time fielding analysis');
         console.log('  checkFieldingStates() - show current state of all fielders');
         console.log('  stopAllFielders() - immediately stop all fielding activity');
         console.log('  resetFielding() - reset fielding system to idle');
