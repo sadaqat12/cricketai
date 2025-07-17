@@ -2027,8 +2027,8 @@ class CricketGame {
         const adjustedX = currentPos.x + velocity.x * effectiveTimeToLand * frictionFactor;
         const adjustedZ = currentPos.z + velocity.z * effectiveTimeToLand * frictionFactor;
         
-        // Add small prediction uncertainty to make it more realistic
-        const uncertainty = 0.5; // 0.5m uncertainty
+        // Add smaller prediction uncertainty since we update dynamically
+        const uncertainty = 0.2; // 0.2m uncertainty (reduced from 0.5m)
         const uncertaintyX = (Math.random() - 0.5) * uncertainty;
         const uncertaintyZ = (Math.random() - 0.5) * uncertainty;
         
@@ -2107,8 +2107,24 @@ class CricketGame {
     updateFielderIntercepting(fielder, deltaTime) {
         if (!fielder.userData.interceptTarget) return;
         
-        const targetPosition = fielder.userData.interceptTarget;
         const ballPosition = this.cricketBall.position;
+        
+        // 🎯 DYNAMIC PREDICTION: Update target based on current ball position every frame
+        if (this.ballPhysics.isMoving) {
+            const updatedPrediction = this.predictBallLanding();
+            if (updatedPrediction) {
+                // Only update if the new prediction is significantly different
+                const currentTarget = fielder.userData.interceptTarget;
+                const predictionDiff = currentTarget.distanceTo(updatedPrediction);
+                
+                if (predictionDiff > 1.0) { // More than 1m difference
+                    console.log(`🔄 ${fielder.userData.description} updating target: (${currentTarget.x.toFixed(1)}, ${currentTarget.z.toFixed(1)}) → (${updatedPrediction.x.toFixed(1)}, ${updatedPrediction.z.toFixed(1)})`);
+                    fielder.userData.interceptTarget = updatedPrediction;
+                }
+            }
+        }
+        
+        const targetPosition = fielder.userData.interceptTarget;
         
         // Calculate direction to target position
         const direction = targetPosition.clone().sub(fielder.position);
@@ -2118,15 +2134,16 @@ class CricketGame {
         // Calculate distance to ball
         const distanceToBall = fielder.position.distanceTo(ballPosition);
         
-        // Check if fielder should attempt catch/pickup
+        // 🎯 SMART TRIGGER: Check if fielder should attempt catch/pickup
         const shouldAttemptCatch = (
-            distanceToTarget < 2.0 ||  // Close to target position
-            distanceToBall < 3.0 ||    // Close to ball
-            ballPosition.y <= 1.0     // Ball is low (near ground)
+            distanceToTarget < 1.5 ||   // Very close to target
+            distanceToBall < 2.5 ||     // Close to actual ball
+            ballPosition.y <= 0.8 ||    // Ball very low
+            !this.ballPhysics.isMoving  // Ball stopped
         );
         
         if (shouldAttemptCatch) {
-            console.log(`🎯 ${fielder.userData.description} attempting catch/pickup at target position!`);
+            console.log(`🎯 ${fielder.userData.description} attempting catch/pickup!`);
             console.log(`   Distance to target: ${distanceToTarget.toFixed(1)}m, Distance to ball: ${distanceToBall.toFixed(1)}m`);
             this.executeDirectCatch(fielder);
             return;
@@ -2145,11 +2162,14 @@ class CricketGame {
             fielder.lookAt(lookAtPosition);
         }
         
-        // Safety timeout (8 seconds max)
+        // Safety timeout (6 seconds instead of 8 for quicker response)
         const interceptDuration = Date.now() - fielder.userData.interceptStartTime;
-        if (interceptDuration > 8000) {
-            console.log(`⏰ ${fielder.userData.description} timeout - executing catch anyway`);
-            this.executeDirectCatch(fielder);
+        if (interceptDuration > 6000) {
+            console.log(`⏰ ${fielder.userData.description} timeout - switching to direct ball chase`);
+            // Switch to chasing the actual ball instead of predicted position
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'chasing');
+            fielder.userData.interceptTarget = null;
+            fielder.userData.interceptStartTime = null;
         }
     }
 
@@ -3038,12 +3058,25 @@ class CricketGame {
             this.character.lookAt(10, 0, 10); // Face bowler
             
             // Try to play standing idle, fall back to available animation if needed
-            if (this.characterAnimations.has('standingidle')) {
-                this.playCricketPlayerAnimation(this.character, 'standingidle');
-            } else if (this.characterAnimations.has('idling')) {
-                this.playCricketPlayerAnimation(this.character, 'idling');
+            if (this.character.userData && this.character.userData.animations) {
+                if (this.character.userData.animations.has('standingidle')) {
+                    this.playCricketPlayerAnimation(this.character, 'standingidle');
+                } else if (this.character.userData.animations.has('fbx_0')) {
+                    this.playCricketPlayerAnimation(this.character, 'fbx_0');
+                } else if (this.character.userData.animations.has('idling')) {
+                    this.playCricketPlayerAnimation(this.character, 'idling');
+                } else {
+                    console.log('⚠️ No idle animation available for batsman, staying in current state');
+                }
             } else {
-                console.log('⚠️ No idle animation available for batsman, staying in current state');
+                // Use main character animation system as fallback
+                if (this.characterAnimations && this.characterAnimations.has('standingidle')) {
+                    this.playAnimation('standingidle');
+                } else if (this.characterAnimations && this.characterAnimations.has('fbx_0')) {
+                    this.playAnimation('fbx_0');
+                } else {
+                    console.log('⚠️ No animation system available for batsman');
+                }
             }
         }
         
@@ -4685,8 +4718,8 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         
         window.testImprovedFielding = () => {
-            console.log('🧪 Testing Improved Fielding System');
-            console.log('===================================');
+            console.log('🧪 Testing Improved Fielding System v2.0');
+            console.log('==========================================');
             
             // Test catch probability calculation
             console.log('📊 Testing catch probability calculations:');
@@ -4733,12 +4766,21 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  ✅ Catch probability clamped to 0-100%');
             console.log('  ✅ Max catch distance: 7m (5m catchRadius + 2m buffer)');
             console.log('  ✅ Running blocked during catch attempts');
-            console.log('  ✅ Improved ball landing prediction with uncertainty');
+            console.log('  ✅ Dynamic prediction updates during ball flight');
+            console.log('  ✅ Reduced prediction uncertainty (0.2m vs 0.5m)');
+            console.log('  ✅ Smart timeout switches to direct ball chase');
+            
+            console.log('');
+            console.log('🆕 New Features v2.0:');
+            console.log('  🔄 Dynamic target updates when prediction changes >1m');
+            console.log('  ⚡ Smarter catch triggers (closer distances, ball stopped)');
+            console.log('  🕐 Faster timeout (6s vs 8s) with direct chase fallback');
+            console.log('  🎯 Better animation system fallbacks');
             
             console.log('');
             console.log('🎮 Test commands:');
             console.log('  bowlStraight() - bowl ball straight');
-            console.log('  playUpperCut() - hit ball to off-side (like your test)');
+            console.log('  playUpperCut() - hit ball to off-side (test dynamic prediction)');
             console.log('  debugFieldingLive() - real-time fielding analysis');
         };
         
