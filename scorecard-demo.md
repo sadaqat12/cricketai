@@ -64,8 +64,9 @@ The scorecard automatically updates during real gameplay:
 
 1. **Bowl a ball**: `bowlStraight()`
 2. **Hit a shot**: `playCoverDrive()`
-3. **Start running**: `startRun()` (or press R)
-4. **Watch the scorecard update** with:
+3. **Start running**: `startRun()` (or press SPACE)
+4. **Slide to crease**: Press L key for slide animation
+5. **Watch the scorecard update** with:
    - Individual player runs
    - Balls faced
    - Automatic batsman swapping on odd runs

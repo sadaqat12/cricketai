@@ -5074,7 +5074,7 @@ class CricketGame {
         // Just go to idle after turn, don't auto-slide
         this.playCricketPlayerAnimation(this.character, 'standingidle');
         
-        console.log(`⏳ Waiting for next run command. Press R to run back, S to slide! (Total runs: ${this.runningSystem.runsCompleted})`);
+        console.log(`⏳ Waiting for next run command. Press SPACE to run back, L to slide! (Total runs: ${this.runningSystem.runsCompleted})`);
     }
 
     // Debug function to check what animations are available
@@ -6031,19 +6031,10 @@ class CricketGame {
                     this.character.position.x += moveSpeed;
                     break;
                 case 'Space':
-                    // Toggle between available animations
-                    if (this.characterAnimations.size > 0) {
-                        const animNames = Array.from(this.characterAnimations.keys());
-                        const currentIndex = animNames.findIndex(name => this.currentAction === this.characterAnimations.get(name));
-                        const nextIndex = (currentIndex + 1) % animNames.length;
-                        this.playAnimation(animNames[nextIndex]);
-                    }
-                    break;
-                case 'KeyR':
                     // Start running between wickets
                     this.startRun();
                     break;
-                case 'KeyS':
+                case 'KeyL':
                     // Play slide animation
                     this.playSlideAnimation();
                     break;
@@ -8016,8 +8007,8 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  playSlide() - play slide animation');
         console.log('  resetRunning() - reset running system');
         console.log('  showRunningStatus() - show current running status');
-        console.log('  Press R key - run between wickets');
-        console.log('  Press S key - play slide animation');
+        console.log('  Press SPACE key - run between wickets');
+        console.log('  Press L key - play slide animation');
         console.log('  Press T key - reset running system');
         console.log('Debugging:');
         console.log('  testShotDirection("shotType") - debug shot direction');
@@ -8444,7 +8435,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('🏏 GAMEPLAY:');
             console.log('  • Bowl balls using: bowlStraight(), bowlLeft(), bowlRight()');
             console.log('  • Play shots using: playCoverDrive(), playPullShot(), etc.');
-            console.log('  • Run between wickets with R key or startRun()');
+            console.log('  • Run between wickets with SPACE key or startRun()');
             console.log('  • Watch target display in top-right corner');
             console.log('');
             console.log('🏆 WIN CONDITIONS:');
