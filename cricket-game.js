@@ -2182,12 +2182,15 @@ class CricketGame {
     }
 
     swapBatsmen() {
-        // Swap striker and non-striker (happens on odd runs)
+        // Swap striker and non-striker (happens on odd runs or end of over)
+        const beforeSwap = this.battingTeam.players[this.battingTeam.currentBatsman].name;
+        
         const temp = this.battingTeam.currentBatsman;
         this.battingTeam.currentBatsman = this.battingTeam.currentPartner;
         this.battingTeam.currentPartner = temp;
         
-        console.log(`🔄 Batsmen swapped: ${this.battingTeam.players[this.battingTeam.currentBatsman].name} now on strike`);
+        const afterSwap = this.battingTeam.players[this.battingTeam.currentBatsman].name;
+        console.log(`🔄 Batsmen swapped: ${beforeSwap} → ${afterSwap} (now on strike)`);
     }
 
     update3DScoreboards() {
@@ -4182,6 +4185,7 @@ class CricketGame {
         
         // ✅ NEW: Handle batsmen swapping on odd runs (1, 3, 5 runs)
         if (this.ballState.runsThisBall % 2 === 1 && this.ballState.ballType !== 'wicket') {
+            console.log(`🏃 Odd runs scored (${this.ballState.runsThisBall}) - batsmen will change ends`);
             this.swapBatsmen();
         }
 
@@ -4197,6 +4201,12 @@ class CricketGame {
         const completedOvers = Math.floor(this.cricketScore.balls / 6);
         const ballsInCurrentOver = this.cricketScore.balls % 6;
         this.cricketScore.overs = completedOvers + (ballsInCurrentOver / 10.0);
+        
+        // ✅ NEW: Swap batsmen at the end of each over (every 6 balls)
+        if (ballsInCurrentOver === 0 && this.cricketScore.balls > 0) {
+            console.log(`🏏 Over completed (${completedOvers} overs)! Batsmen changing ends for next over.`);
+            this.swapBatsmen();
+        }
        
         console.log(`🔍 After adding runs - New total: ${this.cricketScore.runs}/${this.cricketScore.wickets} (added ${this.ballState.runsThisBall} runs)`);
         
@@ -8061,6 +8071,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  debugBowledDetection() - 🆕 DEBUG bowled detection system');
         console.log('  testBowledCollision() - 🆕 FORCE test collision detection');
         console.log('  testBoundary(4 or 6) - test boundary scoring');
+        console.log('  testOverCompletion() - 🆕 TEST over completion & batsman switching!');
         console.log('  getCurrentBatsman() - show current batsmen details');
         console.log('  showBattingLineup() - show complete batting order and status');
         console.log('  setTeamName("Team Name") - change team name');
@@ -8069,7 +8080,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  ✅ 11-player England batting team with realistic names');
         console.log('  ✅ Tracks individual runs, balls faced, dismissal type');
         console.log('  ✅ Highlights current batsmen (striker/non-striker)');
-        console.log('  ✅ Automatic batsman rotation on dismissals and odd runs');
+        console.log('  ✅ Automatic batsman rotation on dismissals, odd runs, and over completion');
         console.log('  ✅ Extras tracking (byes, leg-byes, wides, no-balls)');
         console.log('  ✅ Professional scorecard layout matching real cricket');
         console.log('  ✅ Real-time updates during gameplay');
@@ -8605,6 +8616,56 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  🚀 Perfect shots → High arc, may bounce beyond boundary → SIX');
             console.log('');
             console.log('🧪 Try: playSlog(), playHelicopterShot(), playPowerShot()');
+        };
+
+        // ✅ NEW: Test over completion and batsman switching
+        window.testOverCompletion = () => {
+            console.log('🏏 OVER COMPLETION BATSMAN SWITCHING TEST');
+            console.log('==========================================');
+            console.log('');
+            
+            // Show current batsmen
+            const striker = game.battingTeam.players[game.battingTeam.currentBatsman];
+            const nonStriker = game.battingTeam.players[game.battingTeam.currentPartner];
+            console.log(`📍 BEFORE: Striker = ${striker.name}, Non-striker = ${nonStriker.name}`);
+            console.log(`📊 Current score: ${game.cricketScore.runs}/${game.cricketScore.wickets} (${game.cricketScore.overs.toFixed(1)} overs, ${game.cricketScore.balls} balls)`);
+            console.log('');
+            
+            // Simulate balls to complete current over
+            const ballsInCurrentOver = game.cricketScore.balls % 6;
+            const ballsNeeded = 6 - ballsInCurrentOver;
+            
+            console.log(`🎯 Current ball count: ${game.cricketScore.balls} (${ballsInCurrentOver} balls in current over)`);
+            console.log(`🎾 Simulating ${ballsNeeded} balls to complete the over...`);
+            console.log('');
+            
+            for (let i = 0; i < ballsNeeded; i++) {
+                const ballNumber = ballsInCurrentOver + i + 1;
+                console.log(`--- Ball ${ballNumber} of over ---`);
+                
+                // Simulate even runs so we can see the over-completion swap clearly
+                game.ballState.runsThisBall = 2; // Even runs - no swap during ball
+                game.ballState.ballType = 'normal';
+                game.ballState.isComplete = false;
+                game.ballState.isActive = true;
+                game.ballState.completionReason = null;
+                
+                // Complete the ball
+                game.doCompleteBall();
+                
+                // Show result
+                const currentStriker = game.battingTeam.players[game.battingTeam.currentBatsman];
+                console.log(`   After ball: ${currentStriker.name} on strike`);
+                console.log('');
+            }
+            
+            // Final state
+            const finalStriker = game.battingTeam.players[game.battingTeam.currentBatsman];
+            const finalNonStriker = game.battingTeam.players[game.battingTeam.currentPartner];
+            console.log(`📍 AFTER OVER: Striker = ${finalStriker.name}, Non-striker = ${finalNonStriker.name}`);
+            console.log(`📊 Final score: ${game.cricketScore.runs}/${game.cricketScore.wickets} (${game.cricketScore.overs.toFixed(1)} overs, ${game.cricketScore.balls} balls)`);
+            console.log('');
+            console.log('✅ Over completed! Notice how batsmen switched ends for the new over.');
         };
 
         // ✅ NEW: Test optimized character loading system
