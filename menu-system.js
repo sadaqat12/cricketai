@@ -45,7 +45,80 @@ function hideAllMenus() {
 
 // Game Mode Functions
 function startSinglePlayer() {
-    gameState.gameMode = 'singlePlayer';
+    // Show single player options instead of directly starting
+    hideAllMenus();
+    showSinglePlayerOptions();
+}
+
+function showSinglePlayerOptions() {
+    // Create single player options menu if it doesn't exist
+    let singlePlayerMenu = document.getElementById('singlePlayerOptions');
+    
+    if (!singlePlayerMenu) {
+        singlePlayerMenu = document.createElement('div');
+        singlePlayerMenu.id = 'singlePlayerOptions';
+        singlePlayerMenu.className = 'menu-screen';
+        singlePlayerMenu.innerHTML = `
+            <div class="menu-container">
+                <h2 class="menu-title">Single Player Mode</h2>
+                
+                <div class="game-mode-grid">
+                    <div class="game-mode-card" onclick="startFreePlay()">
+                        <div class="mode-icon">🏏</div>
+                        <h3>Free Play</h3>
+                        <p>Practice your batting skills with unlimited time</p>
+                        <div class="mode-features">
+                            <span>• No pressure</span>
+                            <span>• Unlimited overs</span>
+                            <span>• Practice all shots</span>
+                        </div>
+                    </div>
+                    
+                    <div class="game-mode-card" onclick="startTargetChaseMode()">
+                        <div class="mode-icon">🎯</div>
+                        <h3>Target Chase</h3>
+                        <p>Chase a target score within limited overs!</p>
+                        <div class="mode-features">
+                            <span>• Random target (15-34 runs)</span>
+                            <span>• 2 overs (12 balls)</span>
+                            <span>• Win/lose conditions</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <button class="menu-btn back-btn" onclick="showGameModes()">
+                    <span class="btn-icon">←</span> Back
+                </button>
+            </div>
+        `;
+        document.body.appendChild(singlePlayerMenu);
+    }
+    
+    singlePlayerMenu.classList.add('active');
+    gameState.currentMenu = 'singlePlayerOptions';
+}
+
+function startFreePlay() {
+    gameState.gameMode = 'freePlay';
+    showLoadingScreen();
+    
+    // Hide menus and show game
+    setTimeout(() => {
+        hideAllMenus();
+        document.getElementById('gameContainer').style.display = 'block';
+        hideLoadingScreen();
+        
+        // Initialize the game without target chase
+        if (window.startCricketGame) {
+            window.startCricketGame();
+        }
+        
+        gameState.isPlaying = true;
+    }, 2000);
+}
+
+function startTargetChaseMode() {
+    gameState.gameMode = 'targetChase';
     showLoadingScreen();
     
     // Hide menus and show game
@@ -59,8 +132,15 @@ function startSinglePlayer() {
             window.startCricketGame();
         }
         
+        // Start target chase after a brief delay to ensure game is loaded
+        setTimeout(() => {
+            if (window.startTargetChase) {
+                window.startTargetChase(); // Random target in 2 overs
+            }
+        }, 1000);
+        
         gameState.isPlaying = true;
-    }, 2000); // Simulate loading time
+    }, 2000);
 }
 
 function showMultiplayerOptions() {

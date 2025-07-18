@@ -170,7 +170,22 @@ class CricketGame {
             ballsThisBall: 0,
             lastBoundaryType: null, // 'four' or 'six'
             ballHasBounced: false,
-            boundaryAwarded: false
+            boundaryAwarded: false,
+            ballHasBeenHit: false // ✅ Track if ball has been hit (for bounce detection)
+        };
+
+        // Target chase system
+        this.targetSystem = {
+            isActive: false,
+            targetRuns: 0,
+            maxOvers: 2.0, // 2 overs = 12 balls
+            maxBalls: 12,
+            runsNeeded: 0,
+            ballsRemaining: 12,
+            oversRemaining: 2.0,
+            requiredRunRate: 0.0,
+            gameStatus: 'playing', // 'playing', 'won', 'lost'
+            gameOverReason: null // 'target_achieved', 'overs_completed', 'all_out'
         };
 
         // Ball state management
@@ -1384,11 +1399,19 @@ class CricketGame {
         if (this.cricketBall.position.y <= 0.035) { // Ball radius offset
             this.cricketBall.position.y = 0.035;
             
+            // ✅ FIXED: Check if ball was falling BEFORE reversing velocity
+            const wasFalling = this.ballPhysics.velocity.y <= 0;
+            
             // Bounce
             this.ballPhysics.velocity.y *= -this.ballPhysics.bounceCoefficient;
             
-            // Track ball bounce for boundary scoring
-            this.checkBallBounce();
+            // Only register bounce if ball naturally fell to ground
+            if (wasFalling) {
+                this.checkBallBounce();
+                console.log('🏐 Ball naturally hit ground and bounced (will be FOUR if reaches boundary)');
+            } else {
+                console.log('⚡ Ball constrained to ground level but wasn\'t falling (lofted shot start)');
+            }
             
             // Apply friction to horizontal movement
             this.ballPhysics.velocity.x *= this.ballPhysics.friction;
@@ -1425,7 +1448,16 @@ class CricketGame {
             // Check if ball has crossed boundary for scoring
             this.handleBoundaryScoring();
             
-            // Simple boundary collision - reverse horizontal velocity
+            // ✅ FIXED: Stop ball physics immediately after boundary crossed
+            // Prevents ball from bouncing back and hitting ground (which would change 6 to 4)
+            if (this.cricketScore.boundaryAwarded) {
+                this.ballPhysics.isMoving = false;
+                this.ballPhysics.velocity.set(0, 0, 0);
+                console.log('🛑 Ball physics stopped - boundary scored, preventing false ground contact');
+                return; // Exit physics update
+            }
+            
+            // Only apply boundary collision if no boundary was awarded (ball stayed in play)
             this.ballPhysics.velocity.x *= -0.5;
             this.ballPhysics.velocity.z *= -0.5;
         }
@@ -2059,6 +2091,31 @@ class CricketGame {
         console.log(`🎨 Trail color set to: #${color.toString(16)} for ${shot.description}`);
     }
 
+    setTrailColorForTiming(timing) {
+        // ✅ NEW: Set trail color based on shot timing quality for visual feedback
+        let color = 0xff4444; // Default red
+        
+        switch (timing) {
+            case 'perfect':
+                color = 0x00ff00; // Bright green for perfect timing
+                break;
+            case 'good':
+                color = 0x44ff44; // Light green for good timing
+                break;
+            case 'okay':
+                color = 0xffff44; // Yellow for okay timing
+                break;
+            case 'poor':
+                color = 0xff4444; // Red for poor timing
+                break;
+            default:
+                color = 0xffffff; // White for unknown
+        }
+        
+        this.setBallTrailColor(color);
+        console.log(`🎨 Trail color set to: #${color.toString(16)} for ${timing.toUpperCase()} timing`);
+    }
+
     updateBatCollisionPosition() {
         if (!this.batCollisionSphere || !this.character) return;
         
@@ -2158,28 +2215,134 @@ class CricketGame {
         console.log(`🏏 Executing ${shot.description}...`);
         console.log(`Shot data: Power=${shot.power}, Direction=[${shot.direction}], Height=${shot.height}`);
         
-        // Set trail color based on shot type
-        this.setTrailColorForShot(shot);
+        // ✅ CRICKET RULES FIX: Mark that ball has been hit (for boundary scoring logic)
+        this.cricketScore.ballHasBeenHit = true;
         
-        // Use shot-specific direction instead of bat swing direction
-        const hitDirection = new THREE.Vector3(shot.direction[0], shot.direction[1], shot.direction[2]).normalize();
+        // ✅ ENHANCED: Get comprehensive timing analysis (moved before trail color)
+        const timingResult = this.calculateTimingMultiplier();
+        const { power: powerMultiplier, timing, directionalAccuracy, distance } = timingResult;
         
-        // Calculate hit power with improved scaling
-        const basePower = shot.power * 8; // Increased base power multiplier for more visible differences
-        const powerMultiplier = this.calculateTimingMultiplier();
+        // ✅ NEW: Set trail color based on timing quality instead of just shot type
+        this.setTrailColorForTiming(timing);
+        
+        // ✅ NEW: Calculate base shot direction with timing-based variation
+        let hitDirection = new THREE.Vector3(shot.direction[0], shot.direction[1], shot.direction[2]).normalize();
+        
+        // ✅ CRICKET REALISM: Apply timing-based directional changes
+        if (timing !== 'perfect') {
+            const variationStrength = 1.0 - directionalAccuracy;
+            
+            // ✅ Different types of mistimed shots
+            if (timing === 'poor') {
+                // Poor timing can cause edges, top edges, or complete mishits
+                const mishitType = Math.random();
+                
+                if (mishitType < 0.3 && distance > 2.5) {
+                    // Outside edge - ball goes more toward slips/third man
+                    console.log('🚨 Outside edge! Ball heading to slips');
+                    hitDirection.x += 0.6; // More toward off-side
+                    hitDirection.z += 0.4; // More behind wicket
+                    hitDirection.y -= 0.2; // Lower trajectory
+                } else if (mishitType < 0.5 && distance < 1.0) {
+                    // Inside edge - ball goes toward leg side/keeper
+                    console.log('🚨 Inside edge! Ball deflected leg-side');
+                    hitDirection.x -= 0.4; // Toward leg side
+                    hitDirection.z += 0.3; // Slightly behind
+                    hitDirection.y -= 0.3; // Much lower
+                } else if (mishitType < 0.7) {
+                    // Top edge - high but weak shot
+                    console.log('🚨 Top edge! High but weak');
+                    hitDirection.y += 0.5; // Much higher
+                    hitDirection.x += (Math.random() - 0.5) * 0.8; // Random sideways
+                    hitDirection.z += (Math.random() - 0.5) * 0.6;
+                } else {
+                    // General mishit - significant directional variation
+                    console.log('🚨 Mishit! Ball going off-target');
+                    hitDirection.x += (Math.random() - 0.5) * variationStrength * 1.2;
+                    hitDirection.z += (Math.random() - 0.5) * variationStrength * 1.0;
+                    hitDirection.y += (Math.random() - 0.5) * variationStrength * 0.8;
+                }
+            } else {
+                // Good/okay timing: smaller directional variations
+                console.log(`📊 ${timing.toUpperCase()} timing - adding ${(variationStrength * 100).toFixed(0)}% directional variation`);
+                hitDirection.x += (Math.random() - 0.5) * variationStrength * 0.6;
+                hitDirection.z += (Math.random() - 0.5) * variationStrength * 0.4;
+                hitDirection.y += (Math.random() - 0.5) * variationStrength * 0.3;
+            }
+            
+            // Re-normalize after variation
+            hitDirection.normalize();
+        }
+        
+        // ✅ ENHANCED: Calculate final power with better scaling
+        const basePower = shot.power * 10; // Increased base power for more dramatic differences
         const finalPower = basePower * powerMultiplier;
         
-        // Apply velocity in shot direction
+        // Apply velocity in calculated direction
         this.ballPhysics.velocity.copy(hitDirection.multiplyScalar(finalPower));
         
-        // Add upward component based on shot type (increased scaling)
-        const heightVelocity = shot.height * 15; // Increased height scaling for more visible arc
-        this.ballPhysics.velocity.y += heightVelocity;
+        // ✅ ENHANCED: Height calculation affected by timing
+        let heightVelocity = shot.height * 20; // Increased from 15 to 20 for better loft
+        let startingHeight = 0.5; // Default starting height
+        let loftBoost = 1.0; // Default boost multiplier
         
-        // Add minimal variation to preserve shot accuracy
-        this.addMinimalShotVariation();
+        // ✅ FIXED: Starting height and loft boost depend on BOTH shot type AND timing
+        const isLoftedShot = shot.height > 0.4;
         
-        console.log(`✅ ${shot.description} executed!`);
+        if (isLoftedShot) {
+            // Lofted shots: Height and boost depend on timing quality
+            switch (timing) {
+                case 'perfect':
+                    startingHeight = 1.2; // Full bat height
+                    loftBoost = 1.5; // Full loft boost
+                    console.log(`🎯 PERFECT lofted shot: Starting at ${startingHeight}m with full boost`);
+                    break;
+                case 'good':
+                    startingHeight = 1.0; // Good contact height
+                    loftBoost = 1.25; // Good boost
+                    console.log(`✅ GOOD lofted shot: Starting at ${startingHeight}m with good boost`);
+                    break;
+                case 'okay':
+                    startingHeight = 0.7; // Reduced height
+                    loftBoost = .8; // Minimal boost
+                    console.log(`⚠️ OKAY lofted shot: Starting at ${startingHeight}m with reduced boost`);
+                    break;
+                case 'poor':
+                    startingHeight = 0.4; // Low contact, likely to hit ground
+                    loftBoost = 0.5; // Actually reduces intended loft
+                    console.log(`❌ POOR lofted shot: Starting at ${startingHeight}m with reduced trajectory`);
+                    break;
+            }
+            heightVelocity *= loftBoost;
+        } else {
+            // Ground shots: Always start lower
+            startingHeight = 0.5;
+            console.log(`🏏 Ground shot: Starting at ${startingHeight}m`);
+        }
+        
+        this.cricketBall.position.y = startingHeight;
+        
+        // Apply timing-based height variation
+        if (timing === 'poor') {
+            heightVelocity *= 0.6 + Math.random() * 0.4; // 60%-100% for poor timing
+        } else if (timing === 'okay') {
+            heightVelocity *= 0.8 + Math.random() * 0.3; // 80%-110% for okay timing
+        }
+        // Perfect/good timing keeps enhanced height
+        
+        this.ballPhysics.velocity.y = heightVelocity; // Set directly, don't add to existing
+        
+        // ✅ ENHANCED: Add realistic physics-based variation instead of just random
+        this.addRealisticShotVariation(timing, directionalAccuracy);
+        
+        // ✅ NEW: Display timing feedback
+        const timingEmoji = {
+            'perfect': '🎯',
+            'good': '✅', 
+            'okay': '⚠️',
+            'poor': '❌'
+        };
+        console.log(`${timingEmoji[timing]} ${shot.description} - ${timing.toUpperCase()} timing (${(powerMultiplier * 100).toFixed(0)}% power, ${(directionalAccuracy * 100).toFixed(0)}% accuracy)`);
         
         // Trigger fielding system
         this.onBallHit();
@@ -2191,42 +2354,143 @@ class CricketGame {
     }
 
     addMinimalShotVariation() {
-        // Reduced variation to preserve shot direction accuracy
-        const variation = 0.05; // Only 5% variation to maintain shot precision
+        // ✅ UPDATED: Legacy method - now uses realistic variation
+        this.addRealisticShotVariation('good', 0.9);
+    }
+
+    addRealisticShotVariation(timing, directionalAccuracy) {
+        // ✅ NEW: Physics-based shot variation that reflects real cricket mechanics
+        const velocity = this.ballPhysics.velocity;
+        const speed = velocity.length();
         
-        this.ballPhysics.velocity.x += (Math.random() - 0.5) * variation * Math.abs(this.ballPhysics.velocity.x);
-        this.ballPhysics.velocity.y += (Math.random() - 0.5) * variation * Math.abs(this.ballPhysics.velocity.y);
-        this.ballPhysics.velocity.z += (Math.random() - 0.5) * variation * Math.abs(this.ballPhysics.velocity.z);
+        // Calculate variation based on timing quality and ball speed
+        let baseVariation = 0.02; // Minimal base variation for perfect shots
+        
+        switch (timing) {
+            case 'perfect':
+                baseVariation = 0.02; // 2% - very precise
+                break;
+            case 'good':
+                baseVariation = 0.08; // 8% - slight variation
+                break;
+            case 'okay':
+                baseVariation = 0.18; // 18% - noticeable variation
+                break;
+            case 'poor':
+                baseVariation = 0.35; // 35% - significant variation
+                break;
+        }
+        
+        // ✅ CRICKET PHYSICS: Different variation patterns based on shot quality
+        if (timing === 'poor') {
+            // Poor timing: more unpredictable, can have sudden direction changes
+            const unpredictability = 1.5; // Higher chaos factor
+            velocity.x += (Math.random() - 0.5) * baseVariation * speed * unpredictability;
+            velocity.y += (Math.random() - 0.5) * baseVariation * speed * unpredictability * 0.8;
+            velocity.z += (Math.random() - 0.5) * baseVariation * speed * unpredictability;
+            
+            // ✅ Poor timing often causes the ball to lose speed faster (mishits)
+            const speedLoss = 0.85 + Math.random() * 0.15; // 85%-100% speed retention
+            velocity.multiplyScalar(speedLoss);
+            
+        } else if (timing === 'okay') {
+            // Okay timing: moderate variation with slight bias toward edges
+            velocity.x += (Math.random() - 0.5) * baseVariation * speed;
+            velocity.y += (Math.random() - 0.5) * baseVariation * speed * 0.6;
+            velocity.z += (Math.random() - 0.5) * baseVariation * speed * 0.8;
+            
+        } else {
+            // Good/Perfect timing: minimal, controlled variation
+            velocity.x += (Math.random() - 0.5) * baseVariation * speed * 0.7;
+            velocity.y += (Math.random() - 0.5) * baseVariation * speed * 0.5;
+            velocity.z += (Math.random() - 0.5) * baseVariation * speed * 0.6;
+        }
+        
+        // ✅ REALISTIC: Add small amount of spin-based deviation (like real cricket ball)
+        const spinEffect = timing === 'perfect' ? 0.01 : 0.03;
+        velocity.x += (Math.random() - 0.5) * spinEffect * speed;
+        velocity.z += (Math.random() - 0.5) * spinEffect * speed;
+        
+        console.log(`🌪️ Applied ${timing} shot variation: ${(baseVariation * 100).toFixed(1)}% base variation`);
     }
 
     calculateTimingMultiplier() {
-        // Simple timing system based on how close ball is to optimal hitting zone
-        if (!this.cricketBall) return 1.0;
+        // ✅ ENHANCED: Comprehensive timing system affecting power, direction, and placement
+        if (!this.cricketBall) return { power: 1.0, timing: 'good', directionalAccuracy: 1.0 };
         
         const ballPos = this.cricketBall.position;
         const batPos = this.character.position;
         const distance = ballPos.distanceTo(batPos);
         
-        // Optimal hitting distance is around 1-2 units
-        if (distance >= 1.0 && distance <= 2.0) {
-            this.batSwing.timing = 'perfect';
-            return 1.2; // Perfect timing bonus
-        } else if (distance >= 0.5 && distance <= 3.0) {
-            this.batSwing.timing = 'good';
-            return 1.0; // Good timing
+        // ✅ NEW: Also consider ball velocity and swing timing for more realistic timing
+        const ballVelocity = this.ballPhysics.velocity.length();
+        const swingDuration = Date.now() - this.batSwing.swingStartTime;
+        const optimalSwingTime = 200; // milliseconds - optimal swing timing window
+        const swingTimingFactor = Math.max(0.3, 1.0 - Math.abs(swingDuration - optimalSwingTime) / 400); // More gradual penalty
+        
+        let powerMultiplier, timingCategory, directionalAccuracy;
+        
+        // ✅ DEBUG: Show timing calculation details
+        console.log(`🔍 Timing Debug: distance=${distance.toFixed(2)}m, swingDuration=${swingDuration}ms, swingFactor=${swingTimingFactor.toFixed(3)}`);
+        
+        // ✅ ENHANCED: Balanced cricket timing zones with smoother transitions
+        // Primary factor is swing timing, with distance as secondary factor
+        if (distance >= 0.8 && distance <= 2.5 && swingTimingFactor > 0.80) {
+            // Perfect timing: Excellent swing timing + good ball position
+            timingCategory = 'perfect';
+            powerMultiplier = 1.4; // Increased perfect timing bonus
+            directionalAccuracy = 1.0; // Shot goes exactly where intended
+            console.log('🎯 PERFECT timing! Pure middle of the bat');
+        } else if (distance >= 0.6 && distance <= 3.0 && swingTimingFactor > 0.60) {
+            // Good timing: Good swing timing + decent ball position
+            timingCategory = 'good';
+            powerMultiplier = 1.1;
+            directionalAccuracy = 0.85; // 15% directional variation
+            console.log('✅ Good timing - solid contact');
+        } else if (distance >= 0.4 && distance <= 3.5 && swingTimingFactor > 0.40) {
+            // Okay timing: Moderate swing timing + acceptable ball position
+            timingCategory = 'okay';
+            powerMultiplier = 0.9;
+            directionalAccuracy = 0.65; // 35% directional variation
+            console.log('⚠️ Okay timing - not quite middled');
         } else {
-            this.batSwing.timing = 'poor';
-            return 0.7; // Poor timing penalty
+            // Poor timing: Bad swing timing OR bad ball position OR both
+            timingCategory = 'poor';
+            powerMultiplier = 0.6; // Significant power loss
+            directionalAccuracy = 0.4; // 60% directional variation (edges, mishits)
+            
+            // ✅ CRICKET REALISM: Determine type of mishit
+            if (swingTimingFactor < 0.40) {
+                console.log('❌ POOR timing - swing timing way off!');
+            } else if (distance < 0.4) {
+                console.log('❌ POOR timing - too close! Cramped shot');
+            } else if (distance > 3.5) {
+                console.log('❌ POOR timing - reaching! Outside edge likely');
+            } else {
+                console.log('❌ POOR timing - mistimed shot');
+            }
         }
+        
+        // ✅ NEW: Store detailed timing info for shot variation
+        this.batSwing.timing = timingCategory;
+        this.batSwing.timingDetails = {
+            distance: distance,
+            swingDuration: swingDuration,
+            swingTimingFactor: swingTimingFactor,
+            ballVelocity: ballVelocity
+        };
+        
+        return {
+            power: powerMultiplier,
+            timing: timingCategory,
+            directionalAccuracy: directionalAccuracy,
+            distance: distance
+        };
     }
 
     addShotVariation() {
-        // Add slight randomness to make shots more realistic
-        const variation = 0.1; // 10% variation
-        
-        this.ballPhysics.velocity.x += (Math.random() - 0.5) * variation * this.ballPhysics.velocity.x;
-        this.ballPhysics.velocity.y += (Math.random() - 0.5) * variation * this.ballPhysics.velocity.y;
-        this.ballPhysics.velocity.z += (Math.random() - 0.5) * variation * this.ballPhysics.velocity.z;
+        // ✅ UPDATED: Legacy method - now uses realistic variation system
+        this.addRealisticShotVariation('good', 0.8);
     }
 
     onBallHit() {
@@ -3438,11 +3702,17 @@ class CricketGame {
     updateCricketScore() {
         // Update score display using existing menu system
         if (window.menuSystem && window.menuSystem.updateScore) {
+            // Update basic score
             window.menuSystem.updateScore(
                 this.cricketScore.runs,
                 this.cricketScore.wickets,
                 this.cricketScore.overs.toFixed(1)
             );
+            
+            // Update target info if chase is active
+            if (this.targetSystem.isActive) {
+                this.updateTargetDisplay();
+            }
         } else {
             console.warn(`⚠️ Cannot update score display - menu system not available`);
         }
@@ -3451,6 +3721,63 @@ class CricketGame {
         this.update3DScoreboards();
         
         console.log(`📊 Score updated: ${this.cricketScore.runs}/${this.cricketScore.wickets} in ${this.cricketScore.overs.toFixed(1)} overs`);
+    }
+
+    updateTargetDisplay() {
+        // Create or update target display in the UI
+        let targetDisplay = document.getElementById('targetDisplay');
+        
+        if (!targetDisplay) {
+            // Create target display element
+            targetDisplay = document.createElement('div');
+            targetDisplay.id = 'targetDisplay';
+            targetDisplay.style.cssText = `
+                position: fixed;
+                top: 120px;
+                right: 20px;
+                background: rgba(10, 10, 26, 0.95);
+                border: 2px solid rgba(116, 144, 255, 0.6);
+                border-radius: 15px;
+                padding: 15px 25px;
+                color: white;
+                font-family: 'Orbitron', Arial, sans-serif;
+                z-index: 150;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+                min-width: 250px;
+                text-align: center;
+            `;
+            
+            // Add to in-game UI
+            const inGameUI = document.getElementById('inGameUI');
+            if (inGameUI) {
+                inGameUI.appendChild(targetDisplay);
+            } else {
+                document.body.appendChild(targetDisplay);
+            }
+        }
+        
+        // Update target display content
+        this.updateTargetStats();
+        
+        const runsColor = this.targetSystem.runsNeeded <= 10 ? '#4caf50' : 
+                         this.targetSystem.runsNeeded <= 20 ? '#ff9800' : '#f44336';
+        const ballsColor = this.targetSystem.ballsRemaining <= 3 ? '#f44336' : 
+                          this.targetSystem.ballsRemaining <= 6 ? '#ff9800' : '#4caf50';
+        
+        targetDisplay.innerHTML = `
+            <div style="font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #7490ff;">
+                🎯 TARGET CHASE
+            </div>
+            <div style="font-size: 20px; font-weight: 700; margin-bottom: 5px;">
+                Need <span style="color: ${runsColor};">${this.targetSystem.runsNeeded}</span> runs
+            </div>
+            <div style="font-size: 16px; margin-bottom: 8px;">
+                from <span style="color: ${ballsColor};">${this.targetSystem.ballsRemaining}</span> balls
+            </div>
+            <div style="font-size: 14px; opacity: 0.9; border-top: 1px solid rgba(116, 144, 255, 0.3); padding-top: 8px;">
+                Required Rate: <span style="color: #a0c4ff; font-weight: 600;">${this.targetSystem.requiredRunRate.toFixed(2)}</span>
+            </div>
+        `;
     }
 
     // Start a new ball
@@ -3585,6 +3912,11 @@ class CricketGame {
         }, 2000);
         
         console.log(`✅ Ball completed: ${this.ballState.runsThisBall} runs (${this.ballState.ballType})`);
+        
+        // ✅ NEW: Check target chase conditions after each ball
+        if (this.targetSystem.isActive) {
+            this.checkTargetChaseConditions();
+        }
     }
 
     // Show ball completion summary
@@ -3673,25 +4005,53 @@ class CricketGame {
             this.character.rotation.set(0, 0, 0);
             this.character.lookAt(10, 0, 10); // Face bowler
             
-            // Try to play standing idle, fall back to available animation if needed
-            if (this.character.userData && this.character.userData.animations) {
-                if (this.character.userData.animations.has('standingidle')) {
-                    this.playCricketPlayerAnimation(this.character, 'standingidle');
-                } else if (this.character.userData.animations.has('fbx_0')) {
-                    this.playCricketPlayerAnimation(this.character, 'fbx_0');
-                } else if (this.character.userData.animations.has('idling')) {
-                    this.playCricketPlayerAnimation(this.character, 'idling');
-                } else {
-                    console.log('⚠️ No idle animation available for batsman, staying in current state');
+            // ✅ CRITICAL FIX: Stop any running animations in cricket team system first
+            // This prevents running animations from continuing when we try to set idle
+            if (this.character.userData && this.character.userData.currentAction) {
+                console.log('🛑 Stopping current cricket team animation before reset');
+                this.character.userData.currentAction.stop();
+                this.character.userData.currentAction = null;
+                this.character.userData.currentAnimationName = null;
+            }
+            
+            // ✅ FIXED: Always use main character animation system for consistency with hitting animations
+            // This ensures the same system used by playHittingAnimation() is used for resets
+            if (this.characterAnimations && this.animationMixer) {
+                // Try different idle animation names in order of preference
+                const idleAnimNames = ['standingidle', 'fbx_0', 'idling', 'idle'];
+                let idleSet = false;
+                
+                for (let animName of idleAnimNames) {
+                    if (this.characterAnimations.has(animName)) {
+                        console.log(`🔄 Setting batsman to ${animName} animation for next ball`);
+                        this.playAnimation(animName);
+                        idleSet = true;
+                        break;
+                    }
+                }
+                
+                if (!idleSet) {
+                    console.log('⚠️ No idle animation found in main character system');
+                    // Fallback to cricket team system only if main system fails completely
+                    if (this.character.userData && this.character.userData.animations && this.character.userData.animations.size > 0) {
+                        console.log('🔄 Using cricket team system as emergency fallback');
+                        const fallbackAnim = Array.from(this.character.userData.animations.keys())[0];
+                        this.playCricketPlayerAnimation(this.character, fallbackAnim);
+                    }
                 }
             } else {
-                // Use main character animation system as fallback
-                if (this.characterAnimations && this.characterAnimations.has('standingidle')) {
-                    this.playAnimation('standingidle');
-                } else if (this.characterAnimations && this.characterAnimations.has('fbx_0')) {
-                    this.playAnimation('fbx_0');
-                } else {
-                    console.log('⚠️ No animation system available for batsman');
+                console.log('⚠️ Main character animation system not available - using cricket team system');
+                // Only use cricket team system if main system is completely unavailable
+                if (this.character.userData && this.character.userData.animations) {
+                    if (this.character.userData.animations.has('standingidle')) {
+                        this.playCricketPlayerAnimation(this.character, 'standingidle');
+                    } else if (this.character.userData.animations.has('fbx_0')) {
+                        this.playCricketPlayerAnimation(this.character, 'fbx_0');
+                    } else if (this.character.userData.animations.has('idling')) {
+                        this.playCricketPlayerAnimation(this.character, 'idling');
+                    } else {
+                        console.log('⚠️ No idle animation available in any system');
+                    }
                 }
             }
         }
@@ -3748,6 +4108,29 @@ class CricketGame {
         this.ballState.ballType = 'normal';
         this.ballState.completionReason = null;
         
+        // ✅ CRITICAL FIX: Reset bat swing system completely
+        // This ensures no lingering swing state interferes with next ball's hitting animation
+        this.batSwing.isSwinging = false;
+        this.batSwing.swingDirection.set(0, 0, 0);
+        this.batSwing.swingPower = 0;
+        this.batSwing.swingStartTime = 0;
+        this.batSwing.batSpeed = 0;
+        this.batSwing.shotType = 'straight';
+        this.batSwing.timing = 'perfect';
+        console.log('🔄 Bat swing system reset for next ball');
+        
+        // ✅ CRITICAL FIX: Reset running system completely
+        // This ensures no lingering running animations or states interfere with idle animations
+        this.runningSystem.isRunning = false;
+        this.runningSystem.runState = 'idle';
+        this.runningSystem.currentEnd = 'batsman';
+        this.runningSystem.targetEnd = 'bowler';
+        this.runningSystem.runProgress = 0;
+        this.runningSystem.runsCompleted = 0;
+        this.runningSystem.turningAtEnd = false;
+        this.runningSystem.waitingForNextRun = false;
+        console.log('🔄 Running system completely reset for next ball');
+        
         // Reset bowler receiving system
         this.bowlerReceivingSystem.isReceivingThrow = false;
         
@@ -3768,12 +4151,26 @@ class CricketGame {
             let boundaryRuns = 0;
             let boundaryType = '';
             
-            if (this.cricketScore.ballHasBounced) {
+            // ✅ CRICKET RULES: Proper 4 vs 6 determination
+            // SIX: Ball crosses boundary without EVER touching ground during flight
+            // FOUR: Ball touches ground anywhere during flight OR reaches boundary on ground
+            const ballHeight = this.cricketBall.position.y;
+            const isCurrentlyGrounded = ballHeight <= 0.2; // Ball is on/near ground at boundary
+            
+            if (this.cricketScore.ballHasBounced || isCurrentlyGrounded) {
                 boundaryRuns = 4;
                 boundaryType = 'FOUR';
+                if (this.cricketScore.ballHasBounced && !isCurrentlyGrounded) {
+                    console.log(`🏏 FOUR! Ball bounced during flight (now airborne at ${ballHeight.toFixed(2)}m height)`);
+                    console.log(`   📝 Bounce flag: ${this.cricketScore.ballHasBounced}, Currently grounded: ${isCurrentlyGrounded}`);
+                } else {
+                    console.log(`🏏 FOUR! Ball ${isCurrentlyGrounded ? 'reached boundary on ground' : 'bounced earlier'} (height: ${ballHeight.toFixed(2)})`);
+                }
             } else {
                 boundaryRuns = 6;
                 boundaryType = 'SIX';
+                console.log(`🚀 SIX! Ball crossed boundary in air without touching ground (height: ${ballHeight.toFixed(2)})`);
+                console.log(`   📝 Bounce flag: ${this.cricketScore.ballHasBounced}, Currently grounded: ${isCurrentlyGrounded}`);
             }
 
             this.cricketScore.boundaryAwarded = true; 
@@ -3800,8 +4197,28 @@ class CricketGame {
 
     checkBallBounce() {
         if (this.cricketBall.position.y <= 0.1 && !this.cricketScore.ballHasBounced) {
-            this.cricketScore.ballHasBounced = true;
-            console.log('🏐 Ball bounced - will be 4 runs if boundary crossed');
+            // ✅ CRICKET RULES FIX: Only check bounces AFTER ball has been hit
+            // Natural bounces during delivery (on pitch) should NOT affect boundary scoring
+            if (!this.cricketScore.ballHasBeenHit) {
+                console.log(`🏐 Ball bounced during delivery (natural pitch bounce) - doesn't affect boundary scoring`);
+                return;
+            }
+            
+            const ballDistance = Math.sqrt(
+                this.cricketBall.position.x ** 2 + 
+                this.cricketBall.position.z ** 2
+            );
+            
+            const boundaryDistance = this.FIELD_RADIUS - 2; // ~68m
+            
+            // ✅ CRICKET RULES: Only bounces INSIDE the field count toward FOUR
+            // Bounces outside field boundary don't affect scoring (ball already crossed for SIX)
+            if (ballDistance < boundaryDistance) {
+                this.cricketScore.ballHasBounced = true;
+                console.log(`🏐 Ball bounced AFTER being hit at ${ballDistance.toFixed(1)}m from center - will be FOUR if boundary crossed`);
+            } else {
+                console.log(`🚀 Ball bounced OUTSIDE field (${ballDistance.toFixed(1)}m) - doesn't affect boundary scoring (SIX potential maintained)`);
+            }
         }
     }
 
@@ -3840,9 +4257,256 @@ class CricketGame {
         }, 3000);
     }
 
+    // Target Chase System Methods
+    startTargetChase(targetRuns = null, maxOvers = 2.0) {
+        // Generate random target if none provided (realistic range for 2 overs)
+        if (targetRuns === null) {
+            targetRuns = Math.floor(Math.random() * 20) + 15; // 15-34 runs target
+        }
+        
+        this.targetSystem.isActive = true;
+        this.targetSystem.targetRuns = targetRuns;
+        this.targetSystem.maxOvers = maxOvers;
+        this.targetSystem.maxBalls = Math.floor(maxOvers * 6);
+        this.targetSystem.runsNeeded = targetRuns;
+        this.targetSystem.ballsRemaining = this.targetSystem.maxBalls;
+        this.targetSystem.oversRemaining = maxOvers;
+        this.targetSystem.requiredRunRate = this.calculateRequiredRunRate();
+        this.targetSystem.gameStatus = 'playing';
+        this.targetSystem.gameOverReason = null;
+        
+        // Reset game score for fresh chase
+        this.cricketScore.runs = 0;
+        this.cricketScore.wickets = 0;
+        this.cricketScore.overs = 0;
+        this.cricketScore.balls = 0;
+        this.cricketScore.ballHasBeenHit = false; // ✅ Reset hit flag for new chase
+        
+        console.log(`🎯 TARGET CHASE STARTED! Need ${targetRuns} runs in ${maxOvers} overs (${this.targetSystem.maxBalls} balls)`);
+        console.log(`📊 Required run rate: ${this.targetSystem.requiredRunRate.toFixed(2)} per over`);
+        
+        this.showTargetNotification();
+        this.updateCricketScore();
+    }
+
+    checkTargetChaseConditions() {
+        if (!this.targetSystem.isActive || this.targetSystem.gameStatus !== 'playing') {
+            return;
+        }
+
+        // Update chase statistics
+        this.updateTargetStats();
+
+        // Check win condition - target achieved
+        if (this.cricketScore.runs >= this.targetSystem.targetRuns) {
+            this.targetSystem.gameStatus = 'won';
+            this.targetSystem.gameOverReason = 'target_achieved';
+            console.log(`🏆 TARGET ACHIEVED! Won by ${10 - this.cricketScore.wickets} wickets with ${this.targetSystem.ballsRemaining} balls remaining!`);
+            this.showGameOverScreen('won', `Target achieved with ${this.targetSystem.ballsRemaining} balls remaining!`);
+            return;
+        }
+
+        // Check lose conditions
+        
+        // 1. All overs completed without reaching target
+        if (this.targetSystem.ballsRemaining <= 0) {
+            this.targetSystem.gameStatus = 'lost';
+            this.targetSystem.gameOverReason = 'overs_completed';
+            const shortfall = this.targetSystem.targetRuns - this.cricketScore.runs;
+            console.log(`💀 OVERS COMPLETED! Lost by ${shortfall} runs`);
+            this.showGameOverScreen('lost', `Failed by ${shortfall} runs`);
+            return;
+        }
+
+        // 2. All wickets lost (assuming 10 wickets to lose)
+        if (this.cricketScore.wickets >= 10) {
+            this.targetSystem.gameStatus = 'lost';
+            this.targetSystem.gameOverReason = 'all_out';
+            const shortfall = this.targetSystem.targetRuns - this.cricketScore.runs;
+            console.log(`💀 ALL OUT! Lost by ${shortfall} runs`);
+            this.showGameOverScreen('lost', `All out! Failed by ${shortfall} runs`);
+            return;
+        }
+
+        // 3. Mathematically impossible (need more runs than possible from remaining balls)
+        const maxPossibleRuns = this.targetSystem.ballsRemaining * 6; // Assume max 6 runs per ball
+        if (this.targetSystem.runsNeeded > maxPossibleRuns) {
+            this.targetSystem.gameStatus = 'lost';
+            this.targetSystem.gameOverReason = 'impossible';
+            console.log(`💀 MATHEMATICALLY IMPOSSIBLE! Need ${this.targetSystem.runsNeeded} but only ${maxPossibleRuns} possible`);
+            this.showGameOverScreen('lost', `Target mathematically impossible!`);
+            return;
+        }
+
+        console.log(`📊 Chase update: Need ${this.targetSystem.runsNeeded} from ${this.targetSystem.ballsRemaining} balls (RRR: ${this.targetSystem.requiredRunRate.toFixed(2)})`);
+    }
+
+    updateTargetStats() {
+        this.targetSystem.runsNeeded = this.targetSystem.targetRuns - this.cricketScore.runs;
+        this.targetSystem.ballsRemaining = this.targetSystem.maxBalls - this.cricketScore.balls;
+        this.targetSystem.oversRemaining = this.targetSystem.maxOvers - this.cricketScore.overs;
+        this.targetSystem.requiredRunRate = this.calculateRequiredRunRate();
+    }
+
+    calculateRequiredRunRate() {
+        if (this.targetSystem.oversRemaining <= 0) return 0;
+        return (this.targetSystem.runsNeeded / this.targetSystem.oversRemaining);
+    }
+
+    showTargetNotification() {
+        const notification = document.createElement('div');
+        notification.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 10%;
+                left: 50%;
+                transform: translateX(-50%);
+                background: linear-gradient(135deg, rgba(116, 144, 255, 0.95) 0%, rgba(116, 144, 255, 0.8) 100%);
+                color: white;
+                padding: 25px;
+                border-radius: 15px;
+                font-family: 'Orbitron', Arial, sans-serif;
+                text-align: center;
+                z-index: 1500;
+                font-size: 20px;
+                border: 3px solid #7490ff;
+                box-shadow: 0 0 30px rgba(116, 144, 255, 0.6);
+                animation: targetPulse 0.8s ease-in-out;
+            ">
+                <h2 style="margin: 0 0 15px 0; color: #ffffff; font-size: 28px;">🎯 TARGET CHASE</h2>
+                <p style="margin: 0 0 10px 0; font-size: 24px; font-weight: bold;">Need ${this.targetSystem.targetRuns} runs</p>
+                <p style="margin: 0 0 10px 0; font-size: 18px;">in ${this.targetSystem.maxOvers} overs (${this.targetSystem.maxBalls} balls)</p>
+                <p style="margin: 0; font-size: 16px; opacity: 0.9;">Required Rate: ${this.targetSystem.requiredRunRate.toFixed(2)} per over</p>
+            </div>
+            <style>
+                @keyframes targetPulse {
+                    0% { transform: translateX(-50%) scale(0.8); opacity: 0; }
+                    50% { transform: translateX(-50%) scale(1.05); opacity: 1; }
+                    100% { transform: translateX(-50%) scale(1); opacity: 1; }
+                }
+            </style>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after 4 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 4000);
+    }
+
+    showGameOverScreen(result, message) {
+        const isWon = result === 'won';
+        const notification = document.createElement('div');
+        
+        notification.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.9);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 2000;
+                backdrop-filter: blur(10px);
+            ">
+                <div style="
+                    background: ${isWon ? 'linear-gradient(135deg, rgba(76, 175, 80, 0.95) 0%, rgba(139, 195, 74, 0.9) 100%)' : 'linear-gradient(135deg, rgba(244, 67, 54, 0.95) 0%, rgba(255, 87, 34, 0.9) 100%)'};
+                    color: white;
+                    padding: 40px;
+                    border-radius: 20px;
+                    font-family: 'Orbitron', Arial, sans-serif;
+                    text-align: center;
+                    border: 3px solid ${isWon ? '#4caf50' : '#f44336'};
+                    box-shadow: 0 0 50px ${isWon ? 'rgba(76, 175, 80, 0.8)' : 'rgba(244, 67, 54, 0.8)'};
+                    animation: gameOverPulse 1s ease-in-out;
+                    max-width: 600px;
+                    margin: 20px;
+                ">
+                    <h1 style="margin: 0 0 20px 0; font-size: 42px; font-weight: 900;">
+                        ${isWon ? '🏆 VICTORY!' : '💀 GAME OVER'}
+                    </h1>
+                    <h2 style="margin: 0 0 15px 0; font-size: 24px; opacity: 0.9;">
+                        ${message}
+                    </h2>
+                    <div style="background: rgba(0, 0, 0, 0.3); padding: 20px; border-radius: 10px; margin: 20px 0;">
+                        <h3 style="margin: 0 0 10px 0; font-size: 18px;">Final Score</h3>
+                        <p style="margin: 0; font-size: 20px; font-weight: bold;">
+                            ${this.cricketScore.runs}/${this.cricketScore.wickets} (${this.cricketScore.overs.toFixed(1)} overs)
+                        </p>
+                        <p style="margin: 5px 0 0 0; font-size: 16px; opacity: 0.8;">
+                            Target: ${this.targetSystem.targetRuns} runs
+                        </p>
+                    </div>
+                    <button onclick="window.restartTargetChase()" style="
+                        background: rgba(116, 144, 255, 0.9);
+                        border: 2px solid rgba(116, 144, 255, 1);
+                        color: white;
+                        padding: 15px 30px;
+                        border-radius: 10px;
+                        font-size: 18px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        margin-right: 15px;
+                        font-family: inherit;
+                        transition: all 0.3s ease;
+                    " onmouseover="this.style.background='rgba(116, 144, 255, 1)'" onmouseout="this.style.background='rgba(116, 144, 255, 0.9)'">
+                        🔄 Play Again
+                    </button>
+                    <button onclick="window.quitToMenu()" style="
+                        background: rgba(255, 255, 255, 0.1);
+                        border: 2px solid rgba(255, 255, 255, 0.3);
+                        color: white;
+                        padding: 15px 30px;
+                        border-radius: 10px;
+                        font-size: 18px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        font-family: inherit;
+                        transition: all 0.3s ease;
+                    " onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'" onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'">
+                        🏠 Main Menu
+                    </button>
+                </div>
+            </div>
+            <style>
+                @keyframes gameOverPulse {
+                    0% { transform: scale(0.5); opacity: 0; }
+                    50% { transform: scale(1.05); opacity: 1; }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+            </style>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Store reference for potential cleanup
+        this.gameOverScreen = notification;
+    }
+
+    resetTargetChase() {
+        this.targetSystem.isActive = false;
+        this.targetSystem.gameStatus = 'playing';
+        this.targetSystem.gameOverReason = null;
+        
+        // Remove game over screen if present
+        if (this.gameOverScreen && this.gameOverScreen.parentNode) {
+            this.gameOverScreen.parentNode.removeChild(this.gameOverScreen);
+            this.gameOverScreen = null;
+        }
+        
+        console.log('🔄 Target chase reset');
+    }
+
     resetBallTracking() {
         this.cricketScore.ballHasBounced = false;
         this.cricketScore.boundaryAwarded = false;
+        this.cricketScore.ballHasBeenHit = false; // ✅ Reset hit flag for new ball
     }
 
     // Batting control methods (updated to use new shot system)
@@ -4244,6 +4908,7 @@ class CricketGame {
 
     loadCricketTeam() {
         console.log('🏏 Loading cricket team...');
+        console.log('🚀 OPTIMIZATION: Loading characters with standingidle.fbx directly for immediate animations');
         
         // Define standard cricket fielding positions
         const fieldingPositions = [
@@ -4269,19 +4934,33 @@ class CricketGame {
             this.loadFielder(position, index);
         });
         
-        console.log('✅ Cricket team loading initiated');
+        console.log('✅ Cricket team loading initiated with optimized standingidle.fbx method');
+        console.log('⚡ Loading bowler, keeper, and 9 fielders with immediate idle animations...');
     }
 
     loadBowler() {
         const loader = new FBXLoader();
-        loader.load('character.fbx', (character) => {
+        // Load bowler directly with idle animation
+        loader.load('standingidle.fbx', (character) => {
             // Use the same scaling logic as the main character
             this.setupCricketCharacter(character, 1, 0, -9, 0);
             
-            // Load idle animation for bowler
-            this.loadCharacterAnimation(character, 'standingidle.fbx', 'bowler');
+            // Setup bowler info and animation system
+            character.userData = {
+                description: 'bowler',
+                animationMixer: new THREE.AnimationMixer(character),
+                animations: new Map()
+            };
             
-            // Load throwing animation for bowler
+            // Setup and play idle animation immediately
+            if (character.animations && character.animations.length > 0) {
+                const idleAction = character.userData.animationMixer.clipAction(character.animations[0]);
+                character.userData.animations.set('standingidle', idleAction);
+                idleAction.play();
+                console.log('🎭 Bowler idle animation started immediately');
+            }
+            
+            // Load additional throwing animation for bowler
             this.loadCharacterAnimation(character, 'Throw.fbx', 'bowler');
             
             this.bowler = character;
@@ -4294,9 +4973,11 @@ class CricketGame {
             // Create invisible catch zone around bowler
             this.createBowlerCatchZone();
             
-            console.log('✅ Bowler loaded and positioned with catch zone');
+            console.log('✅ Bowler loaded with immediate idle animation and catch zone');
         }, undefined, (error) => {
-            console.log('❌ Bowler loading failed:', error);
+            console.log('⚠️ standingidle.fbx failed for bowler, falling back to character.fbx + animation loading:', error);
+            // Fallback to original method
+            this.loadBowlerFallback();
         });
     }
 
@@ -4415,12 +5096,25 @@ class CricketGame {
 
     loadWicketKeeper() {
         const loader = new FBXLoader();
-        loader.load('character.fbx', (character) => {
+        // Load keeper directly with idle animation
+        loader.load('standingidle.fbx', (character) => {
             // Use the same scaling logic as the main character
             this.setupCricketCharacter(character, 0, 0, 15, Math.PI);
             
-            // Load idle animation for keeper
-            this.loadCharacterAnimation(character, 'standingidle.fbx', 'keeper');
+            // Setup keeper info and animation system
+            character.userData = {
+                description: 'keeper',
+                animationMixer: new THREE.AnimationMixer(character),
+                animations: new Map()
+            };
+            
+            // Setup and play idle animation immediately
+            if (character.animations && character.animations.length > 0) {
+                const idleAction = character.userData.animationMixer.clipAction(character.animations[0]);
+                character.userData.animations.set('standingidle', idleAction);
+                idleAction.play();
+                console.log('🎭 Keeper idle animation started immediately');
+            }
             
             this.keeper = character;
             this.cricketCharacters.push(character);
@@ -4428,24 +5122,37 @@ class CricketGame {
             
             console.log('✅ Wicket keeper loaded and positioned');
         }, undefined, (error) => {
-            console.log('❌ Wicket keeper loading failed:', error);
+            console.log('⚠️ standingidle.fbx failed for keeper, falling back to character.fbx + animation loading:', error);
+            // Fallback to original method
+            this.loadWicketKeeperFallback();
         });
     }
 
     loadFielder(position, index) {
         const loader = new FBXLoader();
-        loader.load('character.fbx', (character) => {
+        // Load fielder directly with idle animation
+        loader.load('standingidle.fbx', (character) => {
             // Use the same scaling logic as the main character
             this.setupCricketCharacter(character, position.x, 0, position.z, null);
             
             // Make fielder face the batsman/center of pitch
             character.lookAt(0, 0, 5);
             
-            // Store fielder info
+            // Store fielder info and setup animation system
             character.userData = {
                 fieldingPosition: position.name,
-                description: position.description
+                description: position.description,
+                animationMixer: new THREE.AnimationMixer(character),
+                animations: new Map()
             };
+            
+            // Setup and play idle animation immediately
+            if (character.animations && character.animations.length > 0) {
+                const idleAction = character.userData.animationMixer.clipAction(character.animations[0]);
+                character.userData.animations.set('standingidle', idleAction);
+                idleAction.play();
+                console.log(`🎭 ${position.description} idle animation started immediately`);
+            }
             
             // Store original position for return after fielding
             this.fieldingSystem.fielderOriginalPositions.set(position.description, {
@@ -4457,16 +5164,15 @@ class CricketGame {
             // Initialize fielder state
             this.fieldingSystem.fielderStates.set(position.description, 'idle');
             
-            // Load idle animation for fielder
-            this.loadCharacterAnimation(character, 'standingidle.fbx', position.description);
-            
             this.fielders.push(character);
             this.cricketCharacters.push(character);
             this.scene.add(character);
             
-            // console.log(`✅ ${position.description} loaded and positioned at (${position.x}, ${position.z})`);
+            console.log(`✅ ${position.description} loaded with immediate idle animation at (${position.x}, ${position.z})`);
         }, undefined, (error) => {
-            console.log(`❌ ${position.description} loading failed:`, error);
+            console.log(`⚠️ standingidle.fbx failed for ${position.description}, falling back to character.fbx + animation loading:`, error);
+            // Fallback to original method
+            this.loadFielderFallback(position, index);
         });
     }
 
@@ -4523,6 +5229,102 @@ class CricketGame {
                     }
                 }
             }
+        });
+    }
+
+    // Fallback methods for loading cricket team members with character.fbx + animation
+    loadBowlerFallback() {
+        console.log('🔄 Loading bowler with fallback method (character.fbx + animation)');
+        const loader = new FBXLoader();
+        loader.load('character.fbx', (character) => {
+            this.setupCricketCharacter(character, 1, 0, -9, 0);
+            
+            // Setup user data
+            character.userData = {
+                description: 'bowler'
+            };
+            
+            // Load idle animation for bowler
+            this.loadCharacterAnimation(character, 'standingidle.fbx', 'bowler');
+            
+            // Load throwing animation for bowler
+            this.loadCharacterAnimation(character, 'Throw.fbx', 'bowler');
+            
+            this.bowler = character;
+            this.cricketCharacters.push(character);
+            this.scene.add(character);
+            
+            // Store bowler's original position
+            this.bowlerReceivingSystem.originalPosition = character.position.clone();
+            
+            // Create invisible catch zone around bowler
+            this.createBowlerCatchZone();
+            
+            console.log('✅ Bowler loaded via fallback method');
+        }, undefined, (error) => {
+            console.log('❌ Bowler fallback loading also failed:', error);
+        });
+    }
+
+    loadWicketKeeperFallback() {
+        console.log('🔄 Loading keeper with fallback method (character.fbx + animation)');
+        const loader = new FBXLoader();
+        loader.load('character.fbx', (character) => {
+            this.setupCricketCharacter(character, 0, 0, 15, Math.PI);
+            
+            // Setup user data
+            character.userData = {
+                description: 'keeper'
+            };
+            
+            // Load idle animation for keeper
+            this.loadCharacterAnimation(character, 'standingidle.fbx', 'keeper');
+            
+            this.keeper = character;
+            this.cricketCharacters.push(character);
+            this.scene.add(character);
+            
+            console.log('✅ Wicket keeper loaded via fallback method');
+        }, undefined, (error) => {
+            console.log('❌ Keeper fallback loading also failed:', error);
+        });
+    }
+
+    loadFielderFallback(position, index) {
+        console.log(`🔄 Loading ${position.description} with fallback method (character.fbx + animation)`);
+        const loader = new FBXLoader();
+        loader.load('character.fbx', (character) => {
+            this.setupCricketCharacter(character, position.x, 0, position.z, null);
+            
+            // Make fielder face the batsman/center of pitch
+            character.lookAt(0, 0, 5);
+            
+            // Store fielder info
+            character.userData = {
+                fieldingPosition: position.name,
+                description: position.description
+            };
+            
+            // Store original position for return after fielding
+            this.fieldingSystem.fielderOriginalPositions.set(position.description, {
+                x: position.x,
+                y: 0,
+                z: position.z
+            });
+            
+            // Initialize fielder state
+            this.fieldingSystem.fielderStates.set(position.description, 'idle');
+            
+            // Load idle animation for fielder
+            this.loadCharacterAnimation(character, 'standingidle.fbx', position.description);
+            
+            this.fielders.push(character);
+            this.cricketCharacters.push(character);
+            this.scene.add(character);
+            
+            console.log(`✅ ${position.description} loaded via fallback method at (${position.x}, ${position.z})`);
+        }, undefined, (error) => {
+            console.log(`❌ ${position.description} fallback loading also failed:`, error);
         });
     }
 
@@ -4857,19 +5659,23 @@ class CricketGame {
                     break;
                 case 'Digit6':
                     // Bowl ball towards batsman
-                    this.bowlBall(new THREE.Vector3(0, 0, 1), 15);
+                    this.bowlBall(new THREE.Vector3(-0.01, 0, 1), 15);
                     break;
                 case 'Digit7':
                     // Bowl ball to the left
-                    this.bowlBall(new THREE.Vector3(0.5, 0, 1), 12);
+                    this.bowlBall(new THREE.Vector3(0.02, 0, 1), 12);
                     break;
                 case 'Digit8':
                     // Bowl ball to the right
-                    this.bowlBall(new THREE.Vector3(-0.5, 0, 1), 12);
+                    this.bowlBall(new THREE.Vector3(-0.05, 0, 1), 12);
                     break;
                 case 'Digit9':
-                    // Bowl a bouncer (high ball)
-                    this.bowlBall(new THREE.Vector3(0, 0.3, 1), 18);
+                    // Bowl a yorker
+                    this.bowlBall(new THREE.Vector3(0, -1, 1), 20);
+                    break;
+                case 'Digit0':
+                    // Bowl a Bouncer
+                    this.bowlBall(new THREE.Vector3(0, 1, 1), 20);
                     break;
                 case 'KeyQ':
                     // Defensive shot
@@ -6646,6 +7452,244 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 1000);
             
             console.log('🎬 Dropped catch test started - watch console for backup fielder assignment!');
+        };
+
+        // ✅ NEW: Target Chase System Global Functions
+        window.startTargetChase = (targetRuns = null, maxOvers = 2.0) => {
+            if (game) {
+                game.startTargetChase(targetRuns, maxOvers);
+            } else {
+                console.log('⚠️ Game not initialized yet');
+            }
+        };
+
+        window.restartTargetChase = () => {
+            if (game) {
+                game.resetTargetChase();
+                // Generate new random target
+                game.startTargetChase();
+            } else {
+                console.log('⚠️ Game not initialized yet');
+            }
+        };
+
+        // ✅ NEW: Target Chase Demo Functions
+        window.demoTargetChase = () => {
+            console.log('🎯 TARGET CHASE DEMO');
+            console.log('==================');
+            console.log('');
+            console.log('🎮 QUICK START:');
+            console.log('  startTargetChase() - Start with random target (15-34 runs in 2 overs)');
+            console.log('  startTargetChase(25) - Chase specific target (25 runs)');
+            console.log('  startTargetChase(30, 3.0) - Custom target and overs (30 runs in 3 overs)');
+            console.log('');
+            console.log('🏏 GAMEPLAY:');
+            console.log('  • Bowl balls using: bowlStraight(), bowlLeft(), bowlRight()');
+            console.log('  • Play shots using: playCoverDrive(), playPullShot(), etc.');
+            console.log('  • Run between wickets with R key or startRun()');
+            console.log('  • Watch target display in top-right corner');
+            console.log('');
+            console.log('🏆 WIN CONDITIONS:');
+            console.log('  ✅ Reach target runs before overs run out');
+            console.log('  ❌ Fail if overs complete without reaching target');
+            console.log('  ❌ Fail if all 10 wickets lost');
+            console.log('  ❌ Fail if target becomes mathematically impossible');
+            console.log('');
+            console.log('🎯 FEATURES:');
+            console.log('  • Real-time required run rate calculation');
+            console.log('  • Color-coded urgency indicators');
+            console.log('  • Professional game over screens');
+            console.log('  • Restart functionality');
+            console.log('');
+            console.log('Try: startTargetChase() to begin!');
+        };
+
+        // ✅ NEW: Test boundary scoring fix
+        window.testBoundaryFix = () => {
+            console.log('🏏 TESTING BOUNDARY SCORING FIX');
+            console.log('===============================');
+            console.log('✅ FIXED: Ball physics stops at boundary to prevent false bounces');
+            console.log('✅ FIXED: Proper cricket rules for 4s vs 6s');
+            console.log('');
+            console.log('🏆 CRICKET RULES:');
+            console.log('  📏 SIX: Ball crosses boundary WITHOUT touching ground anywhere');
+            console.log('  📏 FOUR: Ball touches ground anywhere during flight (even if airborne at boundary)');
+            console.log('');
+            console.log('🔧 TECHNICAL FIX:');
+            console.log('  🛑 Ball physics stops immediately when boundary crossed');
+            console.log('  🚫 Prevents false ground contact after boundary bounce-back');
+            console.log('');
+            
+            // Test 1: Lofted shot for potential six
+            console.log('📈 Test 1: Lofted shot (may bounce early but still reach boundary high)');
+            game.startNewBall();
+            game.playLoftedShot();
+            
+            setTimeout(() => {
+                // Test 2: Drive shot for four
+                console.log('\n📉 Test 2: Drive shot (lower trajectory, likely touches ground)');
+                game.startNewBall();
+                game.playDriveShot();
+                
+                setTimeout(() => {
+                    // Test 3: Power shot for six
+                    console.log('\n🚀 Test 3: Power shot (high arc, should be TRUE SIX now!)');
+                    game.startNewBall();
+                    game.playPowerShot();
+                    
+                    setTimeout(() => {
+                        // Test 4: Helicopter shot for guaranteed six
+                        console.log('\n🚁 Test 4: Helicopter shot (maximum height, must be SIX)');
+                        game.startNewBall();
+                        game.playHelicopterShot();
+                        
+                        console.log('\n🎯 Watch for these key messages:');
+                        console.log('📊 "🛑 Ball physics stopped" → Boundary crossed, physics halted');
+                        console.log('📊 "🚀 SIX! without touching ground" → TRUE SIX achieved!');
+                        console.log('📊 "🏏 FOUR! bounced during flight" → Proper four with early bounce');
+                    }, 3000);
+                }, 3000);
+            }, 3000);
+        };
+
+        // ✅ NEW: Quick six test
+        window.testSix = () => {
+            console.log('🚀 TESTING FOR TRUE SIX...');
+            console.log('✅ FIXED: Lofted shots now start at bat height (1.2m)');
+            console.log('✅ FIXED: Only natural ground contact registers as bounce');
+            game.startNewBall();
+            game.playHelicopterShot(); // Maximum height shot
+            console.log('🎯 Watch for: "🚀 Lofted shot: Starting at bat height" and "🚀 SIX! without touching ground"');
+        };
+
+        window.testFour = () => {
+            console.log('🏏 TESTING FOR FOUR...');
+            game.startNewBall();
+            game.playDriveShot(); // Lower trajectory shot
+            console.log('🎯 Watch for: "🏐 Ball naturally hit ground" and "🏏 FOUR!"');
+        };
+
+        window.compareSixVsFour = () => {
+            console.log('⚖️ COMPARING SIX VS FOUR...');
+            console.log('1️⃣ Testing lofted shot (should be SIX):');
+            game.startNewBall();
+            game.playHelicopterShot();
+            
+            setTimeout(() => {
+                console.log('\n2️⃣ Testing ground shot (should be FOUR):');
+                game.startNewBall();
+                game.playCoverDrive();
+                
+                console.log('\n🎯 Compare the console messages to see the difference!');
+            }, 4000);
+        };
+
+        window.testTimingEffect = () => {
+            console.log('⏱️ TESTING TIMING EFFECT ON LOFTED SHOTS');
+            console.log('==========================================');
+            console.log('✅ NOW FIXED: Distance-based bounce detection');
+            console.log('📏 NEW: Only infield bounces (< 68m) result in FOUR');
+            console.log('🎯 Timing affects trajectory and bounce location');
+            console.log('');
+            console.log('🔄 Hit multiple slogs and watch the timing differences:');
+            console.log('   🎯 PERFECT timing → High start (1.2m) → Clears field → SIX');
+            console.log('   ✅ GOOD timing → Good start (1.0m) → May clear field → SIX/FOUR');  
+            console.log('   ⚠️ OKAY timing → Lower start (0.7m) → Infield bounce → FOUR');
+            console.log('   ❌ POOR timing → Low start (0.4m) → Early infield bounce → FOUR');
+            console.log('');
+            console.log('🏏 Try multiple playSlog() or playHelicopterShot() calls!');
+            console.log('🔧 Or use testDistanceBounceLogic() to understand the new system');
+        };
+
+        // Helper functions to test specific timing scenarios
+        window.testPerfectSlog = () => {
+            console.log('🎯 FORCING PERFECT TIMING SLOG...');
+            game.startNewBall();
+            // Temporarily force perfect timing by manipulating distance
+            const originalPos = game.cricketBall.position.clone();
+            game.cricketBall.position.set(0, 0, 1.5); // Perfect hitting distance
+            game.playSlog();
+            console.log('Should see: "🎯 PERFECT lofted shot: Starting at 1.2m" → SIX');
+        };
+
+        window.testPoorSlog = () => {
+            console.log('❌ FORCING POOR TIMING SLOG...');
+            game.startNewBall();
+            // Force poor timing by manipulating distance 
+            game.cricketBall.position.set(0, 0, 4.0); // Too far for good timing
+            game.playSlog();
+            console.log('Should see: "❌ POOR lofted shot: Starting at 0.4m" → FOUR');
+        };
+
+        window.testMistimedBounce = () => {
+            console.log('🔧 TESTING MISTIMED SLOG THAT BOUNCES');
+            console.log('====================================');
+            console.log('✅ FIXED: Distance-based bounce detection');
+            console.log('📏 NEW LOGIC: Only infield bounces (< 68m) count as FOUR');
+            console.log('🎯 This test should show:');
+            console.log('   1. "❌ POOR lofted shot: Starting at 0.4m"');
+            console.log('   2. "🏐 Ball bounced INSIDE field" → FOUR');
+            console.log('   3. "🏏 FOUR! Ball bounced during flight"');
+            console.log('   4. "📝 Bounce flag: true"');
+            console.log('');
+            
+            game.startNewBall();
+            game.cricketBall.position.set(0, 0, 4.0); // Force poor timing
+            game.playSlog();
+            
+            console.log('⏱️ Watch the console for the sequence above...');
+        };
+
+        window.testDistanceBounceLogic = () => {
+            console.log('📏 TESTING DISTANCE-BASED BOUNCE LOGIC');
+            console.log('=====================================');
+            console.log('✅ NEW SYSTEM: Bounce location determines 4 vs 6');
+            console.log('');
+            console.log('🏏 CRICKET RULES:');
+            console.log('  📍 Bounce < 68m (inside field) → FOUR if crosses boundary');
+            console.log('  📍 Bounce > 68m (outside field) → SIX (already crossed boundary)');
+            console.log('  📍 No bounce → SIX');
+            console.log('');
+            console.log('🔄 Hit multiple shots and watch bounce distances:');
+            console.log('  🎯 Well-timed lofted shots → May clear field entirely → SIX');
+            console.log('  ⚠️ Mistimed shots → Bounce early (infield) → FOUR');
+            console.log('  🚀 Perfect shots → High arc, may bounce beyond boundary → SIX');
+            console.log('');
+            console.log('🧪 Try: playSlog(), playHelicopterShot(), playPowerShot()');
+        };
+
+        // ✅ NEW: Test optimized character loading system
+        window.testOptimizedLoading = () => {
+            console.log('🚀 OPTIMIZED CHARACTER LOADING SYSTEM');
+            console.log('=====================================');
+            console.log('');
+            console.log('✅ OPTIMIZATION IMPLEMENTED:');
+            console.log('  🎯 All cricket team members now load standingidle.fbx directly');
+            console.log('  ⚡ Eliminates two-step loading process (character.fbx + animation)');
+            console.log('  🏃 Immediate idle animation starts on load');
+            console.log('  🛡️ Fallback to original method if standingidle.fbx fails');
+            console.log('');
+            console.log('🏏 AFFECTED CHARACTERS:');
+            console.log('  🎳 Bowler: standingidle.fbx → immediate idle animation');
+            console.log('  🥅 Wicket Keeper: standingidle.fbx → immediate idle animation');
+            console.log('  ⚾ 9 Fielders: standingidle.fbx → immediate idle animations');
+            console.log('');
+            console.log('⚡ PERFORMANCE BENEFITS:');
+            console.log('  • Faster loading: Single file vs character + animation');
+            console.log('  • Immediate animations: No delay waiting for animation loading');
+            console.log('  • Better user experience: Characters appear animated from start');
+            console.log('  • Reduced network requests: 11 fewer animation file requests');
+            console.log('');
+            console.log('🔍 WHAT TO OBSERVE:');
+            console.log('  ✅ Check console for "idle animation started immediately" messages');
+            console.log('  ✅ All fielders should be animating as soon as they appear');
+            console.log('  ✅ No delay between character appearance and animation start');
+            console.log('  ⚠️ Watch for fallback messages if standingidle.fbx is missing');
+            console.log('');
+            console.log('🎮 TEST COMMANDS:');
+            console.log('  game.loadCricketTeam() - Reload entire team with optimization');
+            console.log('  game.fielders.length - Check how many fielders loaded');
+            console.log('  game.bowler.userData - Check bowler animation system');
         };
     } catch (error) {
         console.error('Error initializing game:', error);
