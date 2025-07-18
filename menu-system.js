@@ -318,6 +318,72 @@ function updateScore(runs, wickets, overs) {
     document.getElementById('oversScore').textContent = overs;
 }
 
+// AI Bowler Toggle Functions
+function toggleAIBowler() {
+    if (window.cricketGame) {
+        const game = window.cricketGame;
+        const toggle = document.getElementById('aiBowlerToggleBtn');
+        const help = document.getElementById('manualBowlingHelp');
+        
+        if (game.aiBowler.isEnabled) {
+            // Disable AI Bowler
+            game.disableAIBowler();
+            toggle.className = 'bowling-btn ai-disabled';
+            toggle.innerHTML = `
+                <span class="btn-icon">👤</span> 
+                <span class="btn-text">AI Bowler: OFF</span>
+            `;
+            help.style.display = 'block';
+            console.log('🎳 AI Bowler disabled - Manual bowling mode activated');
+            console.log('📋 Use digit keys 6-0 to bowl manually');
+        } else {
+            // Enable AI Bowler
+            game.enableAIBowler();
+            toggle.className = 'bowling-btn ai-enabled';
+            toggle.innerHTML = `
+                <span class="btn-icon">🤖</span> 
+                <span class="btn-text">AI Bowler: ON</span>
+            `;
+            help.style.display = 'none';
+            console.log('🤖 AI Bowler enabled - Automatic bowling activated');
+            
+            // ✅ NEW: Trigger AI bowling immediately when toggled on
+            if (!game.ballPhysics.isMoving && !game.ballState.isActive) {
+                console.log('🎳 Starting AI bowling sequence immediately...');
+                setTimeout(() => {
+                    game.initializeAIBowler();
+                }, 500); // Small delay for UI feedback
+            } else {
+                console.log('⚠️ Ball already in play - AI will take over after ball completion');
+            }
+        }
+    }
+}
+
+function showBowlingControls() {
+    // Only show in free play mode
+    if (gameState.gameMode === 'freePlay') {
+        const controls = document.getElementById('bowlingControls');
+        if (controls) {
+            controls.style.display = 'flex';
+        }
+    }
+}
+
+function hideBowlingControls() {
+    const controls = document.getElementById('bowlingControls');
+    if (controls) {
+        controls.style.display = 'none';
+    }
+}
+
+function hideBowlingControls() {
+    const controls = document.getElementById('bowlingControls');
+    if (controls) {
+        controls.style.display = 'none';
+    }
+}
+
 // Export functions for game integration
 window.menuSystem = {
     updateScore,
@@ -325,5 +391,10 @@ window.menuSystem = {
     resumeGame,
     showLoadingScreen,
     hideLoadingScreen,
-    gameState
-}; 
+    gameState,
+    showBowlingControls,
+    hideBowlingControls
+};
+
+// Make toggle function globally accessible
+window.toggleAIBowler = toggleAIBowler; 

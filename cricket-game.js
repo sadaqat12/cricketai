@@ -277,7 +277,7 @@ class CricketGame {
         // ✅ NEW: Bowled Detection System
         this.bowledDetection = {
             stumpsAtBatsmanEnd: [], // Will store references to batsman's stumps
-            stumpCollisionRadius: 0.25, // More generous collision radius around stumps (25cm)
+            stumpCollisionRadius: 0.45, // More generous collision radius around stumps (45cm)
             enabled: true
         };
 
@@ -301,6 +301,111 @@ class CricketGame {
             boundaryBuffer: 5, // Minimum distance from boundary (meters)
             minDistanceFromBatsman: 10, // Minimum distance from batsman (meters)
             minDistanceBetweenFielders: 3 // Minimum distance between fielders (meters)
+        };
+
+        // ✅ NEW: AI Bowler System
+        this.aiBowler = {
+            isEnabled: true, // Can be disabled for multiplayer when human takes over
+            isActive: false, // Whether AI is currently managing bowling
+            bowlingStrategy: 'balanced', // 'aggressive', 'defensive', 'balanced', 'random'
+            
+            // Timing system
+            autoBowlTimer: null,
+            countdownTimer: null,
+            autoBowlDelay: 3000, // 3 seconds after ball completion
+            countdownActive: false,
+            countdownElement: null,
+            
+            // Bowling variations (from existing digit key controls)
+            bowlingVariations: {
+                straight: { 
+                    direction: new THREE.Vector3(-0.01, 0, 1), 
+                    speed: 17, 
+                    name: 'Straight Delivery',
+                    description: 'Good length on the stumps',
+                    difficulty: 'medium'
+                },
+                leftSide: { 
+                    direction: new THREE.Vector3(0.02, 0, 1), 
+                    speed: 17, 
+                    name: 'Outside Off Stump',
+                    description: 'Tempting the batsman to drive',
+                    difficulty: 'easy'
+                },
+                rightSide: { 
+                    direction: new THREE.Vector3(-0.05, 0, 1), 
+                    speed: 17, 
+                    name: 'Leg Stump Line',
+                    description: 'Targeting the pads',
+                    difficulty: 'easy'
+                },
+                yorker: { 
+                    direction: new THREE.Vector3(-0.05, 0, 1.25), 
+                    speed: 20, 
+                    name: 'Yorker',
+                    description: 'Full and fast at the stumps',
+                    difficulty: 'hard'
+                },
+                bouncer: { 
+                    direction: new THREE.Vector3(-0.05, -0.5, 1.5), 
+                    speed: 25, 
+                    name: 'Bouncer',
+                    description: 'Short and aggressive',
+                    difficulty: 'hard'
+                }
+            },
+            
+            // AI Strategy patterns
+            strategies: {
+                aggressive: {
+                    name: 'Aggressive Attack',
+                    description: 'Frequent yorkers and bouncers',
+                    weights: { straight: 20, leftSide: 10, rightSide: 10, yorker: 35, bouncer: 25 }
+                },
+                defensive: {
+                    name: 'Defensive Line',
+                    description: 'Tight lines outside off stump',
+                    weights: { straight: 40, leftSide: 35, rightSide: 20, yorker: 5, bouncer: 0 }
+                },
+                balanced: {
+                    name: 'Balanced Attack',
+                    description: 'Mix of all deliveries',
+                    weights: { straight: 30, leftSide: 20, rightSide: 20, yorker: 15, bouncer: 15 }
+                },
+                random: {
+                    name: 'Unpredictable',
+                    description: 'Completely random deliveries',
+                    weights: { straight: 20, leftSide: 20, rightSide: 20, yorker: 20, bouncer: 20 }
+                }
+            },
+            
+            // Game state awareness
+            gameStateFactors: {
+                ballsInOver: 0,
+                runsThisOver: 0,
+                recentBoundaries: [],
+                batsmanAggression: 'medium', // 'low', 'medium', 'high'
+                pressureSituation: false
+            },
+            
+            // Statistics tracking
+            stats: {
+                ballsBowled: 0,
+                wicketsTaken: 0,
+                runsGiven: 0,
+                boundariesConceded: 0,
+                variationCount: {}
+            }
+        };
+
+        // ✅ NEW: Multiplayer Bowling Interface
+        this.multiplayerBowling = {
+            isHumanControlled: false, // Switch to true for multiplayer mode
+            humanPlayerId: null, // ID of human player controlling bowling
+            controlTransitionPending: false,
+            humanInputTimeout: 10000, // 10 seconds for human to input bowling choice
+            humanInputTimer: null,
+            humanInputElement: null
         };
     }
 
@@ -413,6 +518,21 @@ class CricketGame {
                     window.pendingTargetChase = false;
                     console.log('🎯 Target chase mode activated after loading');
                 }, 500);
+            } else {
+                // Show bowling controls for free play mode
+                setTimeout(() => {
+                    if (window.menuSystem && window.menuSystem.showBowlingControls) {
+                        window.menuSystem.showBowlingControls();
+                        console.log('🎳 Free Play mode - AI Bowler toggle available');
+                        console.log('💡 Toggle AI Bowler in bottom-right corner or use console commands');
+                    }
+                    
+                    // ✅ NEW: Initialize AI Bowler for the first ball in Free Play mode
+                    setTimeout(() => {
+                        console.log('🤖 Initializing AI Bowler for first ball...');
+                        this.initializeAIBowler();
+                    }, 2000); // Give time for UI to settle
+                }, 500);
             }
         }, 1000);
     }
@@ -499,6 +619,19 @@ class CricketGame {
             // Resume if already initialized
             this.resume();
         }
+        
+        // ✅ NEW: Restore game UI elements when starting
+        this.restoreGameUI();
+    }
+    
+    // ✅ NEW: Restore all dynamic game UI elements
+    restoreGameUI() {
+        // Show scorecard button
+        if (this.scorecardUI && this.scorecardUI.button) {
+            this.scorecardUI.button.style.display = 'block';
+        }
+        
+        console.log('🎮 Game UI restored');
     }
 
     pause() {
@@ -528,7 +661,58 @@ class CricketGame {
         this.resetCatchingSystem();
         this.resetRunningSystem();
         
+        // ✅ NEW: Clean up dynamic UI elements when stopping game
+        this.cleanupGameUI();
+        
         console.log('🎮 Game stopped');
+    }
+    
+    // ✅ NEW: Clean up all dynamic game UI elements
+    cleanupGameUI() {
+        // Hide scorecard button
+        if (this.scorecardUI && this.scorecardUI.button) {
+            this.scorecardUI.button.style.display = 'none';
+        }
+        
+        // Hide scorecard container if visible
+        if (this.scorecardUI && this.scorecardUI.container) {
+            this.scorecardUI.container.style.display = 'none';
+            this.scorecardUI.isVisible = false;
+        }
+        
+        // Hide bowling controls
+        if (window.menuSystem && window.menuSystem.hideBowlingControls) {
+            window.menuSystem.hideBowlingControls();
+        }
+        
+        // Clear any AI bowler timers
+        if (this.aiBowler) {
+            this.clearAIBowlerTimers();
+        }
+        
+        // Remove any lingering notifications
+        this.removeAllNotifications();
+        
+        console.log('🧹 Game UI cleaned up');
+    }
+    
+    // ✅ NEW: Remove all notifications
+    removeAllNotifications() {
+        // Remove any notifications that might be lingering
+        const notifications = document.querySelectorAll('[style*="position: fixed"]');
+        notifications.forEach(notification => {
+            // Only remove our game notifications (not menu elements)
+            if (notification.innerHTML && (
+                notification.innerHTML.includes('WICKET') ||
+                notification.innerHTML.includes('BOWLED') ||
+                notification.innerHTML.includes('RUN OUT') ||
+                notification.innerHTML.includes('AI Bowler') ||
+                notification.innerHTML.includes('Manual Bowling') ||
+                notification.innerHTML.includes('countdown')
+            )) {
+                notification.remove();
+            }
+        });
     }
 
     // Settings integration
@@ -4218,8 +4402,10 @@ class CricketGame {
             this.updateScorecardDisplay();
         }
         
-        // Show ball completion summary
-        this.showBallSummary(this.ballState.runsThisBall, this.ballState.ballType);
+        // Show ball completion summary (skip for wickets - they already have specific notifications)
+        if (this.ballState.ballType !== 'wicket') {
+            this.showBallSummary(this.ballState.runsThisBall, this.ballState.ballType);
+        }
         
         // Reset players for the next ball
         setTimeout(() => {
@@ -4232,6 +4418,11 @@ class CricketGame {
         if (this.targetSystem.isActive) {
             this.checkTargetChaseConditions();
         }
+        
+        // ✅ NEW: Initialize AI Bowler for next ball (with 3-second delay)
+        setTimeout(() => {
+            this.initializeAIBowler();
+        }, this.aiBowler.autoBowlDelay);
     }
 
     // Show ball completion summary
@@ -4844,6 +5035,655 @@ class CricketGame {
         this.cricketScore.ballHasBounced = false;
         this.cricketScore.boundaryAwarded = false;
         this.cricketScore.ballHasBeenHit = false; // ✅ Reset hit flag for new ball
+    }
+
+    // ✅ NEW: AI Bowler System Methods
+    
+    // Initialize AI Bowler after ball completion
+    initializeAIBowler() {
+        if (!this.aiBowler.isEnabled) {
+            console.log('🤖 AI Bowler is disabled - Manual bowling mode active');
+            console.log('📋 Use digit keys 6-0 to bowl manually');
+            return;
+        }
+        
+        // Clear any existing timers
+        this.clearAIBowlerTimers();
+        
+        // Check if multiplayer human should bowl instead
+        if (this.multiplayerBowling.isHumanControlled) {
+            this.waitForHumanBowlingInput();
+            return;
+        }
+        
+        // Start AI bowling sequence
+        this.startAIBowlingSequence();
+    }
+    
+    // Start the AI bowling sequence with countdown
+    startAIBowlingSequence() {
+        console.log('🎳 AI Bowler: Starting bowling sequence...');
+        
+        // Update game state awareness
+        this.updateGameStateAwareness();
+        
+        // Select bowling variation based on strategy
+        const selectedVariation = this.selectBowlingVariation();
+        
+        // Create countdown display
+        this.createBowlingCountdown();
+        
+        // Start countdown timer
+        let countdownValue = 3;
+        this.aiBowler.countdownActive = true;
+        
+        const countdownInterval = setInterval(() => {
+            this.updateCountdownDisplay(countdownValue);
+            
+            if (countdownValue <= 0) {
+                clearInterval(countdownInterval);
+                this.executeBowlingAction(selectedVariation);
+                this.removeBowlingCountdown();
+                this.aiBowler.countdownActive = false;
+            }
+            
+            countdownValue--;
+        }, 1000); // 1 second intervals
+        
+        this.aiBowler.countdownTimer = countdownInterval;
+    }
+    
+    // Select bowling variation based on AI strategy
+    selectBowlingVariation() {
+        const strategy = this.aiBowler.strategies[this.aiBowler.bowlingStrategy];
+        const weights = strategy.weights;
+        
+        // Apply game state modifiers
+        const adjustedWeights = this.applyGameStateModifiers(weights);
+        
+        // Weighted random selection
+        const totalWeight = Object.values(adjustedWeights).reduce((sum, weight) => sum + weight, 0);
+        let randomValue = Math.random() * totalWeight;
+        
+        for (const [variation, weight] of Object.entries(adjustedWeights)) {
+            randomValue -= weight;
+            if (randomValue <= 0) {
+                console.log(`🎯 AI selected: ${this.aiBowler.bowlingVariations[variation].name} (${strategy.name} strategy)`);
+                return variation;
+            }
+        }
+        
+        // Fallback to straight delivery
+        return 'straight';
+    }
+    
+    // Apply game state modifiers to bowling weights
+    applyGameStateModifiers(baseWeights) {
+        const adjustedWeights = { ...baseWeights };
+        const factors = this.aiBowler.gameStateFactors;
+        
+        // If batsman is aggressive, bowl more defensively
+        if (factors.batsmanAggression === 'high') {
+            adjustedWeights.leftSide *= 1.5; // Bowl wider
+            adjustedWeights.yorker *= 1.3; // More yorkers
+            adjustedWeights.bouncer *= 0.7; // Fewer bouncers
+        }
+        
+        // If recent boundaries, change strategy
+        if (factors.recentBoundaries.length > 1) {
+            adjustedWeights.straight *= 0.5; // Avoid straight balls
+            adjustedWeights.yorker *= 1.8; // More yorkers
+            adjustedWeights.leftSide *= 1.4; // Bowl wider
+        }
+        
+        // Pressure situations (target chase, late overs)
+        if (factors.pressureSituation) {
+            adjustedWeights.yorker *= 1.5;
+            adjustedWeights.bouncer *= 1.3;
+            adjustedWeights.straight *= 0.8;
+        }
+        
+        // Vary strategy based on balls in over
+        if (factors.ballsInOver >= 4) {
+            // Later in over, more aggressive
+            adjustedWeights.yorker *= 1.2;
+            adjustedWeights.bouncer *= 1.1;
+        }
+        
+        return adjustedWeights;
+    }
+    
+    // Update game state awareness for AI decision making
+    updateGameStateAwareness() {
+        const factors = this.aiBowler.gameStateFactors;
+        
+        // Update balls in over
+        factors.ballsInOver = this.cricketScore.balls % 6;
+        
+        // Calculate runs this over
+        factors.runsThisOver = this.calculateRunsThisOver();
+        
+        // Detect batsman aggression based on recent scoring rate
+        factors.batsmanAggression = this.detectBatsmanAggression();
+        
+        // Check for pressure situations
+        factors.pressureSituation = this.isPressureSituation();
+        
+        // Track recent boundaries (last 6 balls)
+        this.updateRecentBoundariesTracking();
+        
+        console.log(`🧠 AI Game Awareness: Over(${factors.ballsInOver}/6), Runs(${factors.runsThisOver}), Aggression(${factors.batsmanAggression}), Pressure(${factors.pressureSituation})`);
+    }
+    
+    // Calculate runs scored this over
+    calculateRunsThisOver() {
+        // This is a simplified calculation - in a full game you'd track ball-by-ball
+        const ballsInOver = this.cricketScore.balls % 6;
+        return Math.floor(Math.random() * (ballsInOver * 3)); // Placeholder for now
+    }
+    
+    // Detect batsman's aggression level
+    detectBatsmanAggression() {
+        const recentBoundaries = this.aiBowler.gameStateFactors.recentBoundaries.length;
+        if (recentBoundaries >= 2) return 'high';
+        if (recentBoundaries >= 1) return 'medium';
+        return 'low';
+    }
+    
+    // Check if current situation requires pressure bowling
+    isPressureSituation() {
+        // Check target chase scenarios
+        if (this.targetSystem.isActive) {
+            const runRate = this.targetSystem.requiredRunRate;
+            return runRate > 8.0; // High required run rate = pressure
+        }
+        
+        // Check if batsman has scored many runs
+        const currentBatsman = this.battingTeam.players[this.battingTeam.currentBatsman];
+        return currentBatsman.runs > 25; // Set batsman = pressure
+        
+        return false;
+    }
+    
+    // Update tracking of recent boundaries
+    updateRecentBoundariesTracking() {
+        const boundaries = this.aiBowler.gameStateFactors.recentBoundaries;
+        
+        // Add current ball if it was a boundary
+        if (this.ballState.ballType === 'boundary') {
+            boundaries.push({
+                ball: this.cricketScore.balls,
+                runs: this.ballState.runsThisBall,
+                type: this.ballState.runsThisBall === 6 ? 'six' : 'four'
+            });
+        }
+        
+        // Keep only last 6 balls
+        this.aiBowler.gameStateFactors.recentBoundaries = boundaries.filter(
+            boundary => this.cricketScore.balls - boundary.ball < 6
+        );
+    }
+    
+    // Create the bowling countdown display
+    createBowlingCountdown() {
+        // Remove existing countdown if any
+        this.removeBowlingCountdown();
+        
+        // Create countdown container
+        const countdownDiv = document.createElement('div');
+        countdownDiv.id = 'bowlingCountdown';
+        countdownDiv.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10000;
+            background: rgba(20, 20, 40, 0.95);
+            border: 3px solid rgba(116, 144, 255, 0.6);
+            border-radius: 20px;
+            padding: 30px 50px;
+            text-align: center;
+            font-family: 'Orbitron', monospace;
+            box-shadow: 0 0 40px rgba(116, 144, 255, 0.4);
+            backdrop-filter: blur(10px);
+            animation: countdownPulse 1s ease-in-out infinite;
+        `;
+        
+        // Add CSS animation
+        if (!document.getElementById('countdownStyles')) {
+            const style = document.createElement('style');
+            style.id = 'countdownStyles';
+            style.textContent = `
+                @keyframes countdownPulse {
+                    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+                    50% { transform: translate(-50%, -50%) scale(1.05); }
+                }
+                @keyframes countdownNumber {
+                    0% { transform: scale(0.5); opacity: 0; }
+                    50% { transform: scale(1.2); opacity: 1; }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        document.body.appendChild(countdownDiv);
+        this.aiBowler.countdownElement = countdownDiv;
+    }
+    
+    // Update countdown display
+    updateCountdownDisplay(count) {
+        if (!this.aiBowler.countdownElement) return;
+        
+        if (count > 0) {
+            this.aiBowler.countdownElement.innerHTML = `
+                <div style="color: #7490ff; font-size: 24px; margin-bottom: 15px;">
+                    🎳 AI Bowler Ready
+                </div>
+                <div style="color: white; font-size: 72px; font-weight: bold; animation: countdownNumber 0.8s ease-out;">
+                    ${count}
+                </div>
+                <div style="color: #ccc; font-size: 16px; margin-top: 15px;">
+                    Get ready to face the delivery...
+                </div>
+            `;
+        } else {
+            this.aiBowler.countdownElement.innerHTML = `
+                <div style="color: #00ff88; font-size: 32px; font-weight: bold;">
+                    🚀 BOWLING!
+                </div>
+            `;
+        }
+    }
+    
+    // Remove countdown display
+    removeBowlingCountdown() {
+        if (this.aiBowler.countdownElement) {
+            this.aiBowler.countdownElement.remove();
+            this.aiBowler.countdownElement = null;
+        }
+    }
+    
+    // Execute the selected bowling action
+    executeBowlingAction(variationKey) {
+        const variation = this.aiBowler.bowlingVariations[variationKey];
+        
+        console.log(`🎳 AI Bowling: ${variation.name} - ${variation.description}`);
+        
+        // Update AI statistics
+        this.updateAIBowlerStats(variationKey, variation);
+        
+        // Execute the bowl
+        this.bowlBall(variation.direction.clone(), variation.speed);
+        
+        // Show bowling notification
+        this.showBowlingNotification(variation);
+        
+        // Mark AI as active for this ball
+        this.aiBowler.isActive = true;
+    }
+    
+    // Update AI bowler statistics
+    updateAIBowlerStats(variationKey, variation) {
+        const stats = this.aiBowler.stats;
+        
+        stats.ballsBowled++;
+        
+        // Track variation usage
+        if (!stats.variationCount[variationKey]) {
+            stats.variationCount[variationKey] = 0;
+        }
+        stats.variationCount[variationKey]++;
+        
+        console.log(`📊 AI Stats: ${stats.ballsBowled} balls, ${Object.keys(stats.variationCount).length} variations used`);
+    }
+    
+    // Show bowling delivery notification
+    showBowlingNotification(variation) {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            background: rgba(20, 20, 40, 0.95);
+            border: 2px solid rgba(116, 144, 255, 0.5);
+            border-radius: 15px;
+            padding: 20px;
+            color: white;
+            font-family: 'Rajdhani', sans-serif;
+            box-shadow: 0 0 20px rgba(116, 144, 255, 0.3);
+            backdrop-filter: blur(10px);
+            animation: slideInRight 0.5s ease-out;
+        `;
+        
+        notification.innerHTML = `
+            <div style="color: #7490ff; font-size: 16px; font-weight: bold;">
+                🤖 AI Bowler
+            </div>
+            <div style="color: white; font-size: 18px; margin: 5px 0;">
+                ${variation.name}
+            </div>
+            <div style="color: #ccc; font-size: 14px;">
+                ${variation.description}
+            </div>
+            <div style="color: ${variation.difficulty === 'hard' ? '#ff6b6b' : variation.difficulty === 'medium' ? '#ffa500' : '#4ecdc4'}; font-size: 12px; margin-top: 5px;">
+                Difficulty: ${variation.difficulty.toUpperCase()}
+            </div>
+        `;
+        
+        // Add slide animation
+        if (!document.getElementById('bowlingNotificationStyles')) {
+            const style = document.createElement('style');
+            style.id = 'bowlingNotificationStyles';
+            style.textContent = `
+                @keyframes slideInRight {
+                    from { transform: translateX(100%); opacity: 0; }
+                    to { transform: translateX(0); opacity: 1; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        document.body.appendChild(notification);
+        
+        // Remove after 4 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.style.animation = 'slideInRight 0.5s ease-out reverse';
+                setTimeout(() => notification.remove(), 500);
+            }
+        }, 4000);
+    }
+    
+    // Clear all AI bowler timers
+    clearAIBowlerTimers() {
+        if (this.aiBowler.autoBowlTimer) {
+            clearTimeout(this.aiBowler.autoBowlTimer);
+            this.aiBowler.autoBowlTimer = null;
+        }
+        
+        if (this.aiBowler.countdownTimer) {
+            clearInterval(this.aiBowler.countdownTimer);
+            this.aiBowler.countdownTimer = null;
+        }
+        
+        this.removeBowlingCountdown();
+        this.aiBowler.countdownActive = false;
+    }
+    
+    // ✅ MULTIPLAYER: Wait for human bowling input
+    waitForHumanBowlingInput() {
+        console.log('👤 Waiting for human player bowling input...');
+        
+        // Create human input interface
+        this.createHumanBowlingInterface();
+        
+        // Set timeout for human input
+        this.multiplayerBowling.humanInputTimer = setTimeout(() => {
+            console.log('⏰ Human bowling input timeout - AI taking over');
+            this.removeHumanBowlingInterface();
+            this.multiplayerBowling.isHumanControlled = false;
+            this.startAIBowlingSequence();
+        }, this.multiplayerBowling.humanInputTimeout);
+    }
+    
+    // Create human bowling input interface
+    createHumanBowlingInterface() {
+        const interfaceDiv = document.createElement('div');
+        interfaceDiv.id = 'humanBowlingInterface';
+        interfaceDiv.style.cssText = `
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10001;
+            background: rgba(20, 20, 40, 0.95);
+            border: 3px solid rgba(255, 215, 0, 0.6);
+            border-radius: 20px;
+            padding: 25px;
+            text-align: center;
+            font-family: 'Rajdhani', sans-serif;
+            box-shadow: 0 0 30px rgba(255, 215, 0, 0.4);
+            backdrop-filter: blur(10px);
+        `;
+        
+        interfaceDiv.innerHTML = `
+            <div style="color: #ffd700; font-size: 22px; font-weight: bold; margin-bottom: 15px;">
+                👤 Your Turn to Bowl!
+            </div>
+            <div style="color: white; font-size: 16px; margin-bottom: 20px;">
+                Choose your delivery (Keys 6-0):
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                <button onclick="window.cricketGame.humanBowlSelected('straight')" style="background: rgba(116, 144, 255, 0.8); border: none; color: white; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px;">6 - Straight</button>
+                <button onclick="window.cricketGame.humanBowlSelected('leftSide')" style="background: rgba(116, 144, 255, 0.8); border: none; color: white; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px;">7 - Left</button>
+                <button onclick="window.cricketGame.humanBowlSelected('rightSide')" style="background: rgba(116, 144, 255, 0.8); border: none; color: white; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px;">8 - Right</button>
+                <button onclick="window.cricketGame.humanBowlSelected('yorker')" style="background: rgba(116, 144, 255, 0.8); border: none; color: white; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px;">9 - Yorker</button>
+                <button onclick="window.cricketGame.humanBowlSelected('bouncer')" style="background: rgba(116, 144, 255, 0.8); border: none; color: white; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px;">0 - Bouncer</button>
+            </div>
+            <div style="color: #ccc; font-size: 12px; margin-top: 15px;">
+                Timeout in <span id="humanBowlingTimeout">10</span> seconds
+            </div>
+        `;
+        
+        document.body.appendChild(interfaceDiv);
+        this.multiplayerBowling.humanInputElement = interfaceDiv;
+        
+        // Start timeout countdown
+        let timeLeft = 10;
+        const timeoutInterval = setInterval(() => {
+            timeLeft--;
+            const timeoutSpan = document.getElementById('humanBowlingTimeout');
+            if (timeoutSpan) timeoutSpan.textContent = timeLeft;
+            
+            if (timeLeft <= 0) {
+                clearInterval(timeoutInterval);
+            }
+        }, 1000);
+    }
+    
+    // Remove human bowling interface
+    removeHumanBowlingInterface() {
+        if (this.multiplayerBowling.humanInputElement) {
+            this.multiplayerBowling.humanInputElement.remove();
+            this.multiplayerBowling.humanInputElement = null;
+        }
+        
+        if (this.multiplayerBowling.humanInputTimer) {
+            clearTimeout(this.multiplayerBowling.humanInputTimer);
+            this.multiplayerBowling.humanInputTimer = null;
+        }
+    }
+    
+    // Handle human bowling selection
+    humanBowlSelected(variationKey) {
+        console.log(`👤 Human selected: ${this.aiBowler.bowlingVariations[variationKey].name}`);
+        
+        // Clear timeout and interface
+        this.removeHumanBowlingInterface();
+        
+        // Execute the bowling action
+        this.executeBowlingAction(variationKey);
+    }
+    
+    // ✅ PUBLIC API: Enable/Disable AI Bowler
+    enableAIBowler() {
+        this.aiBowler.isEnabled = true;
+        this.multiplayerBowling.isHumanControlled = false;
+        console.log('🤖 AI Bowler enabled');
+    }
+    
+    disableAIBowler() {
+        this.aiBowler.isEnabled = false;
+        this.clearAIBowlerTimers();
+        console.log('🤖 AI Bowler disabled');
+    }
+    
+    // ✅ PUBLIC API: Switch to multiplayer mode
+    enableMultiplayerBowling(humanPlayerId = 'human') {
+        this.multiplayerBowling.isHumanControlled = true;
+        this.multiplayerBowling.humanPlayerId = humanPlayerId;
+        this.aiBowler.isEnabled = false; // Disable AI when human takes over
+        console.log(`👤 Multiplayer bowling enabled for player: ${humanPlayerId}`);
+    }
+    
+    disableMultiplayerBowling() {
+        this.multiplayerBowling.isHumanControlled = false;
+        this.multiplayerBowling.humanPlayerId = null;
+        this.removeHumanBowlingInterface();
+        this.aiBowler.isEnabled = true; // Re-enable AI
+        console.log('👤 Multiplayer bowling disabled - AI taking over');
+    }
+    
+    // ✅ PUBLIC API: Change AI bowling strategy
+    setAIBowlingStrategy(strategy) {
+        if (this.aiBowler.strategies[strategy]) {
+            this.aiBowler.bowlingStrategy = strategy;
+            console.log(`🧠 AI Bowling strategy changed to: ${this.aiBowler.strategies[strategy].name}`);
+            console.log(`📝 ${this.aiBowler.strategies[strategy].description}`);
+        } else {
+            console.log(`❌ Invalid strategy: ${strategy}. Available: ${Object.keys(this.aiBowler.strategies).join(', ')}`);
+        }
+    }
+    
+    // ✅ PUBLIC API: Get AI bowler statistics
+    getAIBowlerStats() {
+        const stats = this.aiBowler.stats;
+        console.log('📊 AI Bowler Statistics:');
+        console.log(`  Balls Bowled: ${stats.ballsBowled}`);
+        console.log(`  Wickets Taken: ${stats.wicketsTaken}`);
+        console.log(`  Runs Given: ${stats.runsGiven}`);
+        console.log(`  Boundaries Conceded: ${stats.boundariesConceded}`);
+        console.log(`  Bowling Variations Used:`);
+        
+        Object.entries(stats.variationCount).forEach(([variation, count]) => {
+            const percentage = ((count / stats.ballsBowled) * 100).toFixed(1);
+            console.log(`    ${this.aiBowler.bowlingVariations[variation].name}: ${count} (${percentage}%)`);
+        });
+        
+        return stats;
+    }
+    
+    // ✅ NEW: Manual bowling method (respects AI toggle)
+    manualBowl(variationKey, direction, speed) {
+        // Check if AI is enabled
+        if (this.aiBowler.isEnabled) {
+            console.log('🤖 AI Bowler is enabled - Manual bowling blocked');
+            console.log('💡 Disable AI Bowler to use manual controls (toggle button or disableAIBowler())');
+            
+            // Show temporary notification
+            this.showManualBowlingBlockedNotification();
+            return;
+        }
+        
+        // Check if a ball is already active
+        if (this.ballPhysics.isMoving || this.ballState.isActive) {
+            console.log('⚠️ Ball already in play - wait for completion');
+            return;
+        }
+        
+        // Get variation info for notification
+        const variation = this.aiBowler.bowlingVariations[variationKey];
+        if (variation) {
+            console.log(`👤 Manual Bowl: ${variation.name} - ${variation.description}`);
+        }
+        
+        // Execute the bowl
+        this.bowlBall(direction, speed);
+        
+        // Show manual bowling notification
+        if (variation) {
+            this.showManualBowlingNotification(variation);
+        }
+    }
+    
+    // Show notification when manual bowling is blocked
+    showManualBowlingBlockedNotification() {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10000;
+            background: rgba(20, 20, 40, 0.95);
+            border: 3px solid rgba(255, 107, 107, 0.6);
+            border-radius: 20px;
+            padding: 30px 40px;
+            text-align: center;
+            font-family: 'Rajdhani', sans-serif;
+            box-shadow: 0 0 40px rgba(255, 107, 107, 0.4);
+            backdrop-filter: blur(10px);
+        `;
+        
+        notification.innerHTML = `
+            <div style="color: #ff6b6b; font-size: 24px; font-weight: bold; margin-bottom: 15px;">
+                🤖 AI Bowler Active
+            </div>
+            <div style="color: white; font-size: 16px; margin-bottom: 15px;">
+                Manual bowling is currently disabled
+            </div>
+            <div style="color: #ccc; font-size: 14px;">
+                Toggle AI Bowler OFF to use manual controls
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove after 3 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.style.opacity = '0';
+                notification.style.transform = 'translate(-50%, -50%) scale(0.9)';
+                setTimeout(() => notification.remove(), 300);
+            }
+        }, 3000);
+    }
+    
+    // Show manual bowling delivery notification
+    showManualBowlingNotification(variation) {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            background: rgba(20, 20, 40, 0.95);
+            border: 2px solid rgba(255, 107, 107, 0.5);
+            border-radius: 15px;
+            padding: 20px;
+            color: white;
+            font-family: 'Rajdhani', sans-serif;
+            box-shadow: 0 0 20px rgba(255, 107, 107, 0.3);
+            backdrop-filter: blur(10px);
+            animation: slideInRight 0.5s ease-out;
+        `;
+        
+        notification.innerHTML = `
+            <div style="color: #ff6b6b; font-size: 16px; font-weight: bold;">
+                👤 Manual Bowling
+            </div>
+            <div style="color: white; font-size: 18px; margin: 5px 0;">
+                ${variation.name}
+            </div>
+            <div style="color: #ccc; font-size: 14px;">
+                ${variation.description}
+            </div>
+            <div style="color: ${variation.difficulty === 'hard' ? '#ff6b6b' : variation.difficulty === 'medium' ? '#ffa500' : '#4ecdc4'}; font-size: 12px; margin-top: 5px;">
+                Difficulty: ${variation.difficulty.toUpperCase()}
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove after 4 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.style.animation = 'slideInRight 0.5s ease-out reverse';
+                setTimeout(() => notification.remove(), 500);
+            }
+        }, 4000);
     }
 
     // Batting control methods (updated to use new shot system)
@@ -6077,24 +6917,24 @@ class CricketGame {
                     }
                     break;
                 case 'Digit6':
-                    // Bowl ball towards batsman
-                    this.bowlBall(new THREE.Vector3(-0.01, 0, 1), 15);
+                    // Bowl ball towards batsman (manual control)
+                    this.manualBowl('straight', new THREE.Vector3(-0.01, 0, 1), 17);
                     break;
                 case 'Digit7':
-                    // Bowl ball to the left
-                    this.bowlBall(new THREE.Vector3(0.02, 0, 1), 12);
+                    // Bowl ball to the left (manual control)
+                    this.manualBowl('leftSide', new THREE.Vector3(0.02, 0, 1), 17);
                     break;
                 case 'Digit8':
-                    // Bowl ball to the right
-                    this.bowlBall(new THREE.Vector3(-0.05, 0, 1), 12);
+                    // Bowl ball to the right (manual control)
+                    this.manualBowl('rightSide', new THREE.Vector3(-0.05, 0, 1), 17);
                     break;
                 case 'Digit9':
-                    // Bowl a yorker
-                    this.bowlBall(new THREE.Vector3(0, -1, 1), 20);
+                    // Bowl a yorker (manual control)
+                    this.manualBowl('yorker', new THREE.Vector3(-0.05, 0, 1.25), 20);
                     break;
                 case 'Digit0':
-                    // Bowl a Bouncer
-                    this.bowlBall(new THREE.Vector3(-0.05, -0.5, 1.5), 25);
+                    // Bowl a Bouncer (manual control)
+                    this.manualBowl('bouncer', new THREE.Vector3(-0.05, -0.5, 1.5), 25);
                     break;
                 case 'KeyQ':
                     // Defensive shot
@@ -6365,7 +7205,7 @@ class CricketGame {
     }
 
     showWicketNotification(fielder, catchType) {
-        // Create a notification element
+        // Create a notification element for catch wicket
         const notification = document.createElement('div');
         notification.innerHTML = `
             <div style="
@@ -6373,29 +7213,41 @@ class CricketGame {
                 top: 20%;
                 left: 50%;
                 transform: translateX(-50%);
-                background: rgba(0, 0, 0, 0.8);
+                background: rgba(0, 0, 0, 0.9);
                 color: white;
-                padding: 10px;
-                border-radius: 5px;
+                padding: 20px;
+                border-radius: 10px;
                 font-family: Arial, sans-serif;
                 text-align: center;
                 z-index: 1000;
-                font-size: 16px;
-                border: 1px solid #4ecdc4;
+                font-size: 20px;
+                border: 3px solid #ff0040;
+                box-shadow: 0 0 20px rgba(255, 0, 64, 0.5);
+                animation: bowledPulse 0.6s ease-in-out;
             ">
-                <h3 style="margin: 0 0 5px 0;">Wicket!</h3>
-                <p style="margin: 0;">${fielder.userData.description} took a spectacular ${catchType}!</p>
+                <h2 style="margin: 0 0 10px 0; color: #4ecdc4; font-size: 28px;">🎉 WICKET!</h2>
+                <p style="margin: 0; font-weight: bold;">${fielder.userData.description} takes a spectacular ${catchType}!</p>
+                <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">Outstanding fielding!</p>
             </div>
+            <style>
+                @keyframes catchPulse {
+                    0% { transform: translateX(-50%) scale(0.8); opacity: 0; }
+                    50% { transform: translateX(-50%) scale(1.1); opacity: 1; }
+                    100% { transform: translateX(-50%) scale(1); opacity: 1; }
+                }
+            </style>
         `;
         
         document.body.appendChild(notification);
         
-        // Remove notification after 3 seconds
+        // Remove notification after longer time for catches (more dramatic)
         setTimeout(() => {
             if (notification.parentNode) {
                 notification.parentNode.removeChild(notification);
             }
-        }, 3000);
+        }, 4000);
+        
+        console.log('🎉 Catch wicket notification displayed');
     }
 
     // ✅ NEW: Show run-out notification
@@ -6896,6 +7748,100 @@ document.addEventListener('DOMContentLoaded', () => {
         window.bowlBall = (direction, speed) => game.bowlBall(direction, speed);
         window.bowlStraight = () => game.bowlBall(new THREE.Vector3(0, 0, 1), 15);
         window.bowlBouncer = () => game.bowlBall(new THREE.Vector3(0, 0.3, 1), 18);
+        
+        // ✅ NEW: Expose AI Bowler controls to console
+        window.enableAIBowler = () => game.enableAIBowler();
+        window.disableAIBowler = () => game.disableAIBowler();
+        window.setAIBowlingStrategy = (strategy) => game.setAIBowlingStrategy(strategy);
+        window.getAIBowlerStats = () => game.getAIBowlerStats();
+        window.humanBowlSelected = (variation) => game.humanBowlSelected(variation);
+        
+        // ✅ NEW: Expose Multiplayer Bowling controls
+        window.enableMultiplayerBowling = (playerId) => game.enableMultiplayerBowling(playerId);
+        window.disableMultiplayerBowling = () => game.disableMultiplayerBowling();
+        
+        // ✅ NEW: AI Bowler demonstration function
+        window.demoAIBowler = () => {
+            console.log('🎳 AI BOWLER DEMONSTRATION');
+            console.log('==========================');
+            console.log('✅ AI Bowler is now integrated into the game!');
+            console.log('');
+            console.log('🎮 FREE PLAY MODE FEATURES:');
+            console.log('  • Toggle button in bottom-right corner');
+            console.log('  • Switch between AI and manual bowling');
+            console.log('  • Manual controls with digit keys 6-0');
+            console.log('  • Real-time help display when manual');
+            console.log('');
+            console.log('🤖 AUTOMATIC FEATURES:');
+            console.log('  • Bowls automatically 3 seconds after each ball');
+            console.log('  • Shows 3-2-1 countdown before bowling');
+            console.log('  • Uses all 5 bowling variations (keys 6-0)');
+            console.log('  • Adapts strategy based on game situation');
+            console.log('');
+            console.log('🎯 BOWLING VARIATIONS:');
+            Object.entries(game.aiBowler.bowlingVariations).forEach(([key, variation]) => {
+                console.log(`  • ${variation.name}: ${variation.description} (${variation.difficulty})`);
+            });
+            console.log('');
+            console.log('🧠 AI STRATEGIES:');
+            Object.entries(game.aiBowler.strategies).forEach(([key, strategy]) => {
+                console.log(`  • ${key}: ${strategy.description}`);
+            });
+            console.log('');
+            console.log('🎮 TRY IT NOW:');
+            console.log('  1. Start Free Play mode');
+            console.log('  2. Look for toggle button in bottom-right');
+            console.log('  3. Toggle AI ON/OFF as desired');
+            console.log('  4. Use digit keys 6-0 when AI is OFF');
+            console.log('');
+            console.log('⚡ QUICK COMMANDS:');
+            console.log('  • toggleAIBowler() - toggle via console');
+            console.log('  • disableAIBowler() - disable for manual control');
+            console.log('  • enableAIBowler() - re-enable automatic bowling');
+            console.log('  • setAIBowlingStrategy("aggressive") - change AI strategy');
+            console.log('  • getAIBowlerStats() - view AI performance');
+            console.log('');
+            console.log('🚀 PERFECT FOR PRACTICE: Full control over bowling pace and style!');
+        };
+        
+        // ✅ NEW: AI Bowler toggle demonstration
+        window.demoAIBowlerToggle = () => {
+            console.log('🔄 AI BOWLER TOGGLE DEMO');
+            console.log('========================');
+            console.log('');
+            console.log('🎮 HOW TO USE:');
+            console.log('  1. Start Free Play mode (not Target Chase)');
+            console.log('  2. Look for 🤖 AI Bowler button in bottom-right corner');
+            console.log('  3. Click to toggle between AI and Manual modes');
+            console.log('');
+            console.log('🤖 AI MODE (Default):');
+            console.log('  • Green button: "AI Bowler: ON"');
+            console.log('  • Automatic 3-second countdown');
+            console.log('  • Intelligent strategy selection');
+            console.log('  • Digit keys 6-0 are blocked');
+            console.log('');
+            console.log('👤 MANUAL MODE:');
+            console.log('  • Red button: "AI Bowler: OFF"');
+            console.log('  • Manual bowling help appears');
+            console.log('  • Full control with digit keys:');
+            console.log('    - 6: Straight delivery');
+            console.log('    - 7: Bowl to left');
+            console.log('    - 8: Bowl to right');
+            console.log('    - 9: Yorker (fast & low)');
+            console.log('    - 0: Bouncer (short & aggressive)');
+            console.log('');
+            console.log('💡 SMART FEATURES:');
+            console.log('  • Blocked manual bowling shows helpful notification');
+            console.log('  • Manual bowling shows delivery info');
+            console.log('  • Toggle persists during gameplay');
+            console.log('  • Works seamlessly with existing game flow');
+            console.log('');
+            console.log('🎯 PERFECT FOR:');
+            console.log('  • Learning different bowling styles');
+            console.log('  • Practicing batting against specific deliveries');
+            console.log('  • Full control over game pacing');
+            console.log('  • Training and skill development');
+        };
         
         // Expose batting controls to console
         window.playDefensiveShot = () => game.playDefensiveShot();
@@ -7887,12 +8833,6 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  ⚡ Smarter catch triggers (closer distances, ball stopped)');
             console.log('  🕐 Faster timeout (6s vs 8s) with direct chase fallback');
             console.log('  🎯 Better animation system fallbacks');
-            
-            console.log('');
-            console.log('🎮 Test commands:');
-            console.log('  bowlStraight() - bowl ball straight');
-            console.log('  playUpperCut() - hit ball to off-side (test dynamic prediction)');
-            console.log('  debugFieldingLive() - real-time fielding analysis');
         };
         
         window.stopAllFielders = () => {
@@ -7988,6 +8928,25 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  bowlStraight() - bowl ball straight');
         console.log('  bowlBouncer() - bowl high ball');
         console.log('  bowlBall(direction, speed) - custom bowling');
+        console.log('🤖 AI Bowler Commands:');
+        console.log('  enableAIBowler() - enable automatic AI bowling');
+        console.log('  disableAIBowler() - disable AI bowling (manual only)');
+        console.log('  setAIBowlingStrategy("strategy") - set AI strategy:');
+        console.log('    • "aggressive" - frequent yorkers and bouncers');
+        console.log('    • "defensive" - tight lines outside off stump');
+        console.log('    • "balanced" - mix of all deliveries (default)');
+        console.log('    • "random" - completely unpredictable');
+        console.log('  getAIBowlerStats() - show AI bowling statistics');
+        console.log('  demoAIBowler() - 🎳 DEMO: Show AI Bowler overview & instructions');
+        console.log('  demoAIBowlerToggle() - 🔄 DEMO: Show toggle feature guide');
+        console.log('🔄 Free Play Toggle:');
+        console.log('  toggleAIBowler() - toggle between AI and manual bowling');
+        console.log('  • In Free Play: Use toggle button in bottom-right corner');
+        console.log('  • Manual mode: Digit keys 6-0 for bowling control');
+        console.log('  • AI mode: Automatic 3-second countdown bowling');
+        console.log('👤 Multiplayer Bowling:');
+        console.log('  enableMultiplayerBowling("playerId") - human takes bowling control');
+        console.log('  disableMultiplayerBowling() - return to AI bowling');
         console.log('Shot Commands:');
         console.log('  playDefensiveShot() - defensive stroke');
         console.log('  playDriveShot() - straight drive');

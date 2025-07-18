@@ -362,6 +362,24 @@
                     <span class="btn-icon">✅</span> Exit Fielding
                 </button>
             </div>
+            
+            <!-- AI Bowler Toggle (Free Play Mode Only) -->
+            <div class="bowling-controls" id="bowlingControls" style="display: none;">
+                <button id="aiBowlerToggleBtn" class="bowling-btn ai-enabled" onclick="toggleAIBowler()">
+                    <span class="btn-icon">🤖</span> 
+                    <span class="btn-text">AI Bowler: ON</span>
+                </button>
+                <div id="manualBowlingHelp" class="manual-bowling-help" style="display: none;">
+                    <div class="help-title">Manual Bowling:</div>
+                    <div class="help-controls">
+                        <span>6: Straight</span>
+                        <span>7: Left</span>
+                        <span>8: Right</span>
+                        <span>9: Yorker</span>
+                        <span>0: Bouncer</span>
+                    </div>
+                </div>
+            </div>
         </div>
         
         <!-- Pause Menu -->
