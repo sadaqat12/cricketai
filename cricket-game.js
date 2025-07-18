@@ -263,7 +263,12 @@ class CricketGame {
             button: null
         };
         
-        // Don't initialize immediately - wait for menu system to call start()
+        // ✅ NEW: Bowled Detection System
+        this.bowledDetection = {
+            stumpsAtBatsmanEnd: [], // Will store references to batsman's stumps
+            stumpCollisionRadius: 0.25, // More generous collision radius around stumps (25cm)
+            enabled: true
+        };
     }
 
     init() {
@@ -787,6 +792,11 @@ class CricketGame {
                 stump.position.set((i - 1) * 0.1, 0.355, zPosition); // Space stumps 10cm apart
                 stump.castShadow = true;
                 stump.name = `stump_${end}_${i}`;
+                
+                // ✅ NEW: Store batsman's stumps for bowled detection
+                if (end === 0) { // Batsman's end
+                    this.bowledDetection.stumpsAtBatsmanEnd.push(stump);
+                }
                 
                 this.scene.add(stump);
             }
@@ -1377,6 +1387,9 @@ class CricketGame {
 
     updateBallPhysics(deltaTime) {
         if (!this.cricketBall || !this.ballPhysics.isMoving) return;
+        
+        // ✅ NEW: Check for bowled FIRST (highest priority wicket)
+        this.checkBowledDetection();
         
         // ✅ NEW: Check for catches FIRST while ball is in flight
         this.checkForActiveCatches();
@@ -2136,6 +2149,60 @@ class CricketGame {
         const collisionRadius = this.batSwing.isSwinging ? 1.5 : 0.35;
         
         return distance < collisionRadius;
+    }
+
+    // ✅ NEW: Check if ball hits the stumps for a bowled dismissal
+    checkBowledDetection() {
+        // Only check if bowled detection is enabled and ball hasn't been hit by batsman
+        if (!this.bowledDetection.enabled || 
+            !this.cricketBall || 
+            !this.ballPhysics.isMoving ||
+            this.cricketScore.ballHasBeenHit) {
+            return;
+        }
+
+        // ✅ DEBUG: Check if stumps are properly stored
+        if (!this.bowledDetection.stumpsAtBatsmanEnd || this.bowledDetection.stumpsAtBatsmanEnd.length === 0) {
+            console.log('⚠️ No stumps found for bowled detection');
+            return;
+        }
+
+        // Check if ball is reasonably close to stump height and batsman's end
+        const ballPos = this.cricketBall.position;
+        const ballHeight = ballPos.y;
+        const ballZ = ballPos.z;
+        
+        // ✅ FIXED: Ball should be approaching batsman's end (z > 8.5, not < 8.0)
+        // Batsman's end is at z = +10.06 (PITCH_LENGTH/2), so ball should be getting close
+        if (ballHeight < 0.05 || ballHeight > 1.5 || ballZ < 8.5) {
+            return;
+        }
+        
+        // ✅ DEBUG: Log ball position when near stumps for debugging
+        if (ballZ > 9.0) {
+            console.log(`🔍 Ball near stumps: pos(${ballPos.x.toFixed(2)}, ${ballPos.y.toFixed(2)}, ${ballPos.z.toFixed(2)}), hit=${this.cricketScore.ballHasBeenHit}`);
+        }
+        
+        // Check collision with each stump at batsman's end
+        for (const stump of this.bowledDetection.stumpsAtBatsmanEnd) {
+            const stumpPos = stump.position;
+            const distance = ballPos.distanceTo(stumpPos);
+            
+            // ✅ DEBUG: Log distance when close
+            if (distance < 0.5) {
+                console.log(`🎯 Close to ${stump.name}: distance=${distance.toFixed(3)}m (threshold=${this.bowledDetection.stumpCollisionRadius})`);
+            }
+            
+            if (distance <= this.bowledDetection.stumpCollisionRadius) {
+                console.log(`🎯 BOWLED! Ball hit ${stump.name} at batsman's end!`);
+                console.log(`   Ball position: (${ballPos.x.toFixed(2)}, ${ballPos.y.toFixed(2)}, ${ballPos.z.toFixed(2)})`);
+                console.log(`   Stump position: (${stumpPos.x.toFixed(2)}, ${stumpPos.y.toFixed(2)}, ${stumpPos.z.toFixed(2)})`);
+                console.log(`   Distance: ${distance.toFixed(3)}m`);
+                
+                this.executeBowledDismissal();
+                return;
+            }
+        }
     }
 
     playShot(shotType) {
@@ -4906,6 +4973,62 @@ class CricketGame {
         console.log(`✅ Run-out completed successfully!`);
     }
 
+    // ✅ NEW: Execute bowled dismissal
+    executeBowledDismissal() {
+        console.log(`🎯💥 BOWLED! Batsman missed and ball hit the stumps!`);
+        
+        // Stop ball movement immediately
+        this.ballPhysics.isMoving = false;
+        this.ballPhysics.velocity.set(0, 0, 0);
+        
+        // Keep ball at stump position for visual effect
+        // (Ball position is already at the stumps from collision detection)
+        
+        // Clear ball trail for clean visual
+        this.clearBallTrail();
+        
+        // Stop any running or batting actions immediately - batsman is out
+        this.runningSystem.isRunning = false;
+        this.runningSystem.runState = 'idle';
+        this.batSwing.isSwinging = false;
+        
+        // ✅ Handle wicket scoring for bowled
+        this.cricketScore.wickets += 1;
+        console.log(`📊 BOWLED! Wicket taken! Score: ${this.cricketScore.runs}/${this.cricketScore.wickets}`);
+        
+        // ✅ Complete the ball immediately with bowled result
+        if (this.ballState.isActive && !this.ballState.isComplete) {
+            this.ballState.ballType = 'wicket';
+            this.ballState.completionReason = 'bowled';
+            this.ballState.runsThisBall = 0; // No runs can be scored when bowled
+            
+            // Force complete the ball immediately (bowled has highest priority)
+            setTimeout(() => {
+                this.forceCompleteBall();
+            }, 500);
+        }
+        
+        // ✅ Show bowled notification
+        this.showBowledNotification();
+        
+        // Play celebration animation on bowler
+        if (this.bowler) {
+            this.playCricketPlayerAnimation(this.bowler, 'standingidle');
+        }
+        
+        // Also show argument animation (batsman disagreeing with decision) if available
+        setTimeout(() => {
+            if (this.character.userData.animations && this.character.userData.animations.has('standingarguing')) {
+                this.playCricketPlayerAnimationOnce(this.character, 'standingarguing', () => {
+                    this.playCricketPlayerAnimation(this.character, 'standingidle');
+                });
+                console.log('😤 Batsman argues with the umpire decision!');
+            }
+        }, 1000);
+        
+        console.log(`✅ Bowled dismissal completed successfully!`);
+    }
+
     loadCricketTeam() {
         console.log('🏏 Loading cricket team...');
         console.log('🚀 OPTIMIZATION: Loading characters with standingidle.fbx directly for immediate animations');
@@ -5999,6 +6122,53 @@ class CricketGame {
         console.log('🏃‍♂️💥 Run-out notification displayed');
     }
 
+    // ✅ NEW: Show bowled notification
+    showBowledNotification() {
+        // Create a notification element for bowled dismissal
+        const notification = document.createElement('div');
+        notification.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 20%;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0, 0, 0, 0.9);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                font-family: Arial, sans-serif;
+                text-align: center;
+                z-index: 1000;
+                font-size: 20px;
+                border: 3px solid #ff0040;
+                box-shadow: 0 0 20px rgba(255, 0, 64, 0.5);
+                animation: bowledPulse 0.6s ease-in-out;
+            ">
+                <h2 style="margin: 0 0 10px 0; color: #ff0040; font-size: 28px;">🎯💥 BOWLED!</h2>
+                <p style="margin: 0; font-weight: bold;">Batsman missed and ball hit the stumps!</p>
+                <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">Perfect bowling delivery!</p>
+            </div>
+            <style>
+                @keyframes bowledPulse {
+                    0% { transform: translateX(-50%) scale(0.8); opacity: 0; }
+                    50% { transform: translateX(-50%) scale(1.1); opacity: 1; }
+                    100% { transform: translateX(-50%) scale(1); opacity: 1; }
+                }
+            </style>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after time
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 4000);
+        
+        console.log('🎯💥 Bowled notification displayed');
+    }
+
     // Method to remove objects from the scene (for future use)
     removeFromScene(object) {
         this.scene.remove(object);
@@ -6529,7 +6699,16 @@ document.addEventListener('DOMContentLoaded', () => {
             // Start a new ball and record a wicket
             game.startNewBall();
             game.ballState.ballType = 'wicket';
-            game.ballState.completionReason = dismissalType === 'run out' ? 'run_out' : 'caught';
+            
+            // ✅ FIXED: Properly handle all dismissal types
+            if (dismissalType === 'run out') {
+                game.ballState.completionReason = 'run_out';
+            } else if (dismissalType === 'bowled') {
+                game.ballState.completionReason = 'bowled';
+            } else {
+                game.ballState.completionReason = 'caught';
+            }
+            
             game.ballState.runsThisBall = 0;
             
             // Complete the ball to trigger wicket processing
@@ -6662,6 +6841,11 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  stopAllFielders() - Emergency stop all fielding');
             console.log('  testWicketScenario() - Force a wicket to test scoring');
             console.log('  testRunOutScenario() - Force a run-out to test system');
+            console.log('  testBowledScenario() - Force a bowled dismissal');
+            console.log('  testLiveBowledDetection() - Instructions for live testing');
+            console.log('  simulateBowledMiss() - Automated bowled test scenario');
+            console.log('  debugBowledDetection() - Debug bowled detection system');
+            console.log('  testBowledCollision() - Force test collision detection');
             console.log('');
             console.log('🔧 WHAT TO LOOK FOR:');
             console.log('  ✅ Fielders closest to ball should respond first');
@@ -6670,6 +6854,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  ✅ Clear console messaging about fielder selection');
             console.log('  ✅ Proper wicket notifications and scoring when catches succeed');
             console.log('  ✅ Run-outs when batsman is caught mid-run');
+            console.log('  ✅ Bowled dismissals when ball hits stumps (batsman misses)');
             console.log('');
             console.log('Bowl a ball and watch the console for detailed fielding analysis!');
         };
@@ -6728,6 +6913,138 @@ document.addEventListener('DOMContentLoaded', () => {
             
             console.log(`📊 After run-out - Score: ${game.cricketScore.runs}/${game.cricketScore.wickets}`);
             console.log('✅ Run-out test completed! Check for notifications and score updates.');
+        };
+
+        // ✅ NEW: Test bowled scenario
+        window.testBowledScenario = () => {
+            console.log('🧪 Testing Bowled Scenario...');
+            
+            if (!game.cricketBall || !game.bowledDetection.stumpsAtBatsmanEnd.length) {
+                console.log('❌ No ball or stumps available for bowled test');
+                return;
+            }
+            
+            // Start a new ball first
+            game.startNewBall();
+            
+            console.log(`📊 Before bowled - Score: ${game.cricketScore.runs}/${game.cricketScore.wickets}`);
+            
+            // Reset ball hit flag to simulate missed ball
+            game.cricketScore.ballHasBeenHit = false;
+            
+            // Position ball near stumps to simulate bowled
+            const stumpPos = game.bowledDetection.stumpsAtBatsmanEnd[1].position; // Middle stump
+            game.cricketBall.position.set(stumpPos.x + 0.1, stumpPos.y, stumpPos.z + 0.05);
+            game.ballPhysics.isMoving = true;
+            game.ballPhysics.velocity.set(0, 0, 2); // Moving toward stumps
+            
+            console.log(`🎯 Simulating ball hitting stumps at batsman's end...`);
+            console.log(`   Ball position: (${game.cricketBall.position.x.toFixed(2)}, ${game.cricketBall.position.y.toFixed(2)}, ${game.cricketBall.position.z.toFixed(2)})`);
+            console.log(`   Stump position: (${stumpPos.x.toFixed(2)}, ${stumpPos.y.toFixed(2)}, ${stumpPos.z.toFixed(2)})`);
+            
+            // Force bowled detection
+            game.executeBowledDismissal();
+            
+            console.log(`📊 After bowled - Score: ${game.cricketScore.runs}/${game.cricketScore.wickets}`);
+            console.log('✅ Bowled test completed! Check for notifications and score updates.');
+        };
+
+        // ✅ NEW: Test live bowled detection
+        window.testLiveBowledDetection = () => {
+            console.log('🧪 Testing Live Bowled Detection...');
+            console.log('🎯 Bowl a ball straight at the stumps without swinging!');
+            console.log('📋 Instructions:');
+            console.log('   1. Run: bowlStraight()');
+            console.log('   2. DON\'T hit any shot keys (let ball pass)');
+            console.log('   3. Watch for bowled detection if ball hits stumps');
+            console.log('');
+            console.log('⚡ Or run: simulateBowledMiss() for automated test');
+        };
+
+        // ✅ NEW: Simulate a complete bowled miss
+        window.simulateBowledMiss = () => {
+            console.log('🎯 Simulating complete bowled scenario...');
+            
+            // Reset game state
+            game.startNewBall();
+            game.cricketScore.ballHasBeenHit = false;
+            game.ballPhysics.isMoving = false;
+            
+            // Position ball at bowler's end
+            game.cricketBall.position.set(0, 1, -8);
+            
+            // Bowl straight toward stumps
+            game.bowlBall(new THREE.Vector3(0, 0, 1), 12);
+            
+            console.log('🏏 Ball bowled! Watch for bowled detection...');
+            console.log('🚫 Remember: Don\'t hit any shot keys to simulate a miss!');
+        };
+
+        // ✅ NEW: Debug bowled detection system
+        window.debugBowledDetection = () => {
+            console.log('🔍 DEBUG: Bowled Detection System Status');
+            console.log('==========================================');
+            console.log(`Enabled: ${game.bowledDetection.enabled}`);
+            console.log(`Collision radius: ${game.bowledDetection.stumpCollisionRadius}m`);
+            console.log(`Stumps at batsman end: ${game.bowledDetection.stumpsAtBatsmanEnd.length}`);
+            
+            if (game.bowledDetection.stumpsAtBatsmanEnd.length > 0) {
+                console.log('Stump positions:');
+                game.bowledDetection.stumpsAtBatsmanEnd.forEach((stump, i) => {
+                    const pos = stump.position;
+                    console.log(`  ${stump.name}: (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
+                });
+            }
+            
+            if (game.cricketBall) {
+                const ballPos = game.cricketBall.position;
+                console.log(`Ball position: (${ballPos.x.toFixed(2)}, ${ballPos.y.toFixed(2)}, ${ballPos.z.toFixed(2)})`);
+                console.log(`Ball moving: ${game.ballPhysics.isMoving}`);
+                console.log(`Ball has been hit: ${game.cricketScore.ballHasBeenHit}`);
+                
+                if (game.bowledDetection.stumpsAtBatsmanEnd.length > 0) {
+                    const nearestStump = game.bowledDetection.stumpsAtBatsmanEnd[1]; // middle stump
+                    const distance = ballPos.distanceTo(nearestStump.position);
+                    console.log(`Distance to middle stump: ${distance.toFixed(3)}m`);
+                }
+            }
+        };
+
+        // ✅ NEW: Force ball position to test collision
+        window.testBowledCollision = () => {
+            console.log('🧪 Testing bowled collision detection...');
+            
+            if (!game.cricketBall || game.bowledDetection.stumpsAtBatsmanEnd.length === 0) {
+                console.log('❌ Missing ball or stumps');
+                return;
+            }
+            
+            // Get middle stump position
+            const middleStump = game.bowledDetection.stumpsAtBatsmanEnd[1];
+            const stumpPos = middleStump.position;
+            
+            // Position ball very close to stump
+            game.cricketBall.position.set(
+                stumpPos.x + 0.05, 
+                stumpPos.y, 
+                stumpPos.z - 0.05
+            );
+            
+            // Ensure ball is moving and hasn't been hit
+            game.ballPhysics.isMoving = true;
+            game.cricketScore.ballHasBeenHit = false;
+            
+            console.log(`Ball positioned at: (${game.cricketBall.position.x.toFixed(3)}, ${game.cricketBall.position.y.toFixed(3)}, ${game.cricketBall.position.z.toFixed(3)})`);
+            console.log(`Stump at: (${stumpPos.x.toFixed(3)}, ${stumpPos.y.toFixed(3)}, ${stumpPos.z.toFixed(3)})`);
+            
+            const distance = game.cricketBall.position.distanceTo(stumpPos);
+            console.log(`Distance: ${distance.toFixed(3)}m (threshold: ${game.bowledDetection.stumpCollisionRadius})`);
+            
+            if (distance <= game.bowledDetection.stumpCollisionRadius) {
+                console.log('✅ Should trigger bowled detection!');
+            } else {
+                console.log('❌ Too far for collision detection');
+            }
         };
 
         // ✅ NEW: Debug actual bowler catch scenario
@@ -7112,6 +7429,11 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  resetTeamStats() - reset all player stats to 0');
         console.log('  simulateInnings() - load a realistic sample innings');
         console.log('  testWicket("caught/run out/bowled") - test wicket recording');
+        console.log('  testBowledScenario() - 🆕 TEST bowled dismissal scenario');
+        console.log('  simulateBowledMiss() - 🆕 AUTOMATED bowled test (bowl + miss)');
+        console.log('  testLiveBowledDetection() - 🆕 INSTRUCTIONS for live testing');
+        console.log('  debugBowledDetection() - 🆕 DEBUG bowled detection system');
+        console.log('  testBowledCollision() - 🆕 FORCE test collision detection');
         console.log('  testBoundary(4 or 6) - test boundary scoring');
         console.log('  getCurrentBatsman() - show current batsmen details');
         console.log('  showBattingLineup() - show complete batting order and status');
@@ -7125,6 +7447,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  ✅ Extras tracking (byes, leg-byes, wides, no-balls)');
         console.log('  ✅ Professional scorecard layout matching real cricket');
         console.log('  ✅ Real-time updates during gameplay');
+        console.log('  ✅ 🆕 Bowled dismissal detection when ball hits stumps');
         
         // ✅ NEW: Test the improved fielding system
         window.testImprovedFieldingV4 = () => {
