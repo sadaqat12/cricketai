@@ -102,45 +102,42 @@ function startFreePlay() {
     gameState.gameMode = 'freePlay';
     showLoadingScreen();
     
-    // Hide menus and show game
-    setTimeout(() => {
-        hideAllMenus();
-        document.getElementById('gameContainer').style.display = 'block';
-        hideLoadingScreen();
-        
-        // Initialize the game without target chase
-        if (window.startCricketGame) {
-            window.startCricketGame();
-        }
-        
-        gameState.isPlaying = true;
-    }, 2000);
+    // Hide menus and show game immediately
+    hideAllMenus();
+    document.getElementById('gameContainer').style.display = 'block';
+    
+    // ✅ NEW: Let the game's loading system handle the loading screen
+    // Don't hide loading screen here - the game will handle it
+    
+    // Initialize the game without target chase
+    if (window.startCricketGame) {
+        window.startCricketGame();
+    }
+    
+    gameState.isPlaying = true;
 }
 
 function startTargetChaseMode() {
     gameState.gameMode = 'targetChase';
     showLoadingScreen();
     
-    // Hide menus and show game
-    setTimeout(() => {
-        hideAllMenus();
-        document.getElementById('gameContainer').style.display = 'block';
-        hideLoadingScreen();
-        
-        // Initialize the game
-        if (window.startCricketGame) {
-            window.startCricketGame();
-        }
-        
-        // Start target chase after a brief delay to ensure game is loaded
-        setTimeout(() => {
-            if (window.startTargetChase) {
-                window.startTargetChase(); // Random target in 2 overs
-            }
-        }, 1000);
-        
-        gameState.isPlaying = true;
-    }, 2000);
+    // Hide menus and show game immediately
+    hideAllMenus();
+    document.getElementById('gameContainer').style.display = 'block';
+    
+    // ✅ NEW: Let the game's loading system handle the loading screen
+    // Don't hide loading screen here - the game will handle it
+    
+    // Initialize the game
+    if (window.startCricketGame) {
+        window.startCricketGame();
+    }
+    
+    // Start target chase after loading is complete
+    // The game will handle target chase activation after loading
+    window.pendingTargetChase = true;
+    
+    gameState.isPlaying = true;
 }
 
 function showMultiplayerOptions() {

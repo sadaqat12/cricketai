@@ -17,6 +17,17 @@ class CricketGame {
         this.isPaused = false;
         this.animationId = null;
         
+        // ✅ NEW: Loading system
+        this.loadingState = {
+            isLoading: true,
+            totalSteps: 8, // scene, camera, renderer, lighting, field, character, team, ball
+            completedSteps: 0,
+            currentStep: '',
+            ballLoadingProgress: 0,
+            characterLoadingProgress: 0,
+            teamLoadingProgress: 0
+        };
+        
         // Cricket field dimensions (in meters)
         this.FIELD_RADIUS = 70; // Typical cricket field radius
         this.PITCH_LENGTH = 20.12; // 22 yards in meters
@@ -271,8 +282,124 @@ class CricketGame {
         };
     }
 
+    // ✅ NEW: Loading system methods
+    updateLoadingProgress(step, progress = null) {
+        this.loadingState.currentStep = step;
+        
+        if (progress !== null) {
+            // Update specific loading progress
+            if (step.includes('ball')) {
+                this.loadingState.ballLoadingProgress = progress;
+            } else if (step.includes('character')) {
+                this.loadingState.characterLoadingProgress = progress;
+            } else if (step.includes('team')) {
+                this.loadingState.teamLoadingProgress = progress;
+            }
+        }
+        
+        // Update loading screen
+        this.updateLoadingScreen();
+    }
+
+    completeLoadingStep(step) {
+        this.loadingState.completedSteps++;
+        this.loadingState.currentStep = `✅ ${step} complete`;
+        console.log(`✅ Loading step completed: ${step} (${this.loadingState.completedSteps}/${this.loadingState.totalSteps})`);
+        
+        // Update loading screen
+        this.updateLoadingScreen();
+        
+        // Check if all loading is complete
+        if (this.loadingState.completedSteps >= this.loadingState.totalSteps) {
+            setTimeout(() => {
+                this.completeLoading();
+            }, 500);
+        }
+    }
+
+    updateLoadingScreen() {
+        const loadingScreen = document.getElementById('loadingScreen');
+        const loadingText = document.querySelector('.loading-text');
+        const progressBar = document.querySelector('.loading-progress');
+        
+        if (!loadingScreen || !loadingText) return;
+        
+        // Show loading screen if not visible
+        if (loadingScreen.style.display === 'none') {
+            loadingScreen.style.display = 'flex';
+        }
+        
+        // Update text
+        loadingText.textContent = this.loadingState.currentStep;
+        
+        // Update progress bar if it exists, or create one
+        if (!progressBar) {
+            this.createProgressBar();
+        } else {
+            const overallProgress = (this.loadingState.completedSteps / this.loadingState.totalSteps) * 100;
+            progressBar.style.width = `${overallProgress}%`;
+        }
+    }
+
+    createProgressBar() {
+        const loadingContent = document.querySelector('.loading-content');
+        if (!loadingContent) return;
+        
+        const progressContainer = document.createElement('div');
+        progressContainer.className = 'loading-progress-container';
+        progressContainer.style.cssText = `
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            margin: 20px 0;
+            overflow: hidden;
+        `;
+        
+        const progressBar = document.createElement('div');
+        progressBar.className = 'loading-progress';
+        progressBar.style.cssText = `
+            height: 100%;
+            background: linear-gradient(90deg, #4ecdc4, #44a08d);
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.3s ease;
+        `;
+        
+        progressContainer.appendChild(progressBar);
+        loadingContent.appendChild(progressContainer);
+    }
+
+    completeLoading() {
+        this.loadingState.isLoading = false;
+        this.loadingState.currentStep = '🎮 Game Ready!';
+        this.updateLoadingScreen();
+        this.isInitialized = true;
+        
+        // Hide loading screen after brief delay
+        setTimeout(() => {
+            const loadingScreen = document.getElementById('loadingScreen');
+            if (loadingScreen) {
+                loadingScreen.style.display = 'none';
+            }
+            console.log('🎉 All loading complete - Game ready to play!');
+            
+            // ✅ NEW: Handle pending target chase if needed
+            if (window.pendingTargetChase && window.startTargetChase) {
+                setTimeout(() => {
+                    window.startTargetChase();
+                    window.pendingTargetChase = false;
+                    console.log('🎯 Target chase mode activated after loading');
+                }, 500);
+            }
+        }, 1000);
+    }
+
     init() {
         console.log('🎯 Initializing Cricket Game...');
+        
+        // Show loading screen immediately
+        this.updateLoadingProgress('🎯 Initializing Cricket Game...');
         
         // Filter out common FBX loader warnings that don't affect functionality
         const originalWarn = console.warn;
@@ -287,61 +414,57 @@ class CricketGame {
         };
         
         try {
-            console.log('Creating scene...');
+            // Step 1: Create scene
+            this.updateLoadingProgress('🌌 Creating cosmic cricket field...');
             this.createScene();
+            this.completeLoadingStep('Scene');
             
-            console.log('Creating camera...');
+            // Step 2: Create camera  
+            this.updateLoadingProgress('📷 Setting up camera angles...');
             this.createCamera();
+            this.completeLoadingStep('Camera');
             
-            console.log('Creating renderer...');
+            // Step 3: Create renderer
+            this.updateLoadingProgress('🎨 Initializing graphics renderer...');
             this.createRenderer();
+            this.completeLoadingStep('Renderer');
             
-            console.log('Creating lighting...');
+            // Step 4: Create lighting
+            this.updateLoadingProgress('💡 Setting up stadium lighting...');
             this.createLighting();
-            
-            console.log('Creating field...');
             this.createField();
-            
-            console.log('Creating pitch...');
             this.createPitch();
-            
-            console.log('Creating boundary...');
             this.createBoundary();
+            this.completeLoadingStep('Field & Lighting');
             
-            console.log('Creating controls...');
+            // Step 5: Create controls
+            this.updateLoadingProgress('🎮 Setting up camera controls...');
             this.createControls();
+            this.createBatCollisionSphere();
+            this.createBallTrail();
+            this.createScoreboards();
+            this.createScorecardUI();
+            this.addEventListeners();
+            this.completeLoadingStep('Game Systems');
             
-            console.log('Loading character...');
+            // Step 6: Load main character (async)
+            this.updateLoadingProgress('🏏 Loading main batsman...');
             this.loadCharacter();
             
-            console.log('Loading cricket team...');
+            // Step 7: Load cricket team (async)
+            this.updateLoadingProgress('👥 Loading cricket team...');
             this.loadCricketTeam();
             
-            console.log('Loading cricket ball...');
+            // Step 8: Load cricket ball (async)
+            this.updateLoadingProgress('🏏 Loading cricket ball...');
             this.loadCricketBall();
             
-            console.log('Creating bat collision system...');
-            this.createBatCollisionSphere();
-            
-            console.log('Creating ball trail system...');
-            this.createBallTrail();
-            
-                    console.log('Creating 3D scoreboards...');
-        this.createScoreboards();
-        
-        console.log('Creating scorecard UI...');
-        this.createScorecardUI();
-        
-        console.log('Adding event listeners...');
-        this.addEventListeners();
-            
-            console.log('Starting animation loop...');
+            // Start animation loop immediately (will work with whatever is loaded)
             this.animate();
             
-            this.isInitialized = true;
-            console.log('✅ Cricket Game initialization complete!');
         } catch (error) {
             console.error('❌ Error during game initialization:', error);
+            this.updateLoadingProgress('❌ Loading failed - Please refresh');
             throw error;
         }
     }
@@ -877,14 +1000,20 @@ class CricketGame {
             // Load additional animations for batsman
             this.loadMainCharacterAnimation('hitting.fbx');
             this.loadMainCharacterAnimation('standingidle.fbx');
+            
+            // ✅ NEW: Mark character loading as complete
+            this.completeLoadingStep('Main Character');
         }, 
         // Progress callback
         (progress) => {
-            console.log('Loading progress:', (progress.loaded / progress.total * 100) + '%');
+            const percent = Math.round((progress.loaded / progress.total) * 100);
+            // ✅ NEW: Update loading screen with character progress
+            this.updateLoadingProgress(`🏏 Loading main batsman... ${percent}%`, percent);
         },
         // Error callback
         (error) => {
             console.error('❌ Error loading character:', error);
+            this.updateLoadingProgress('❌ Character loading failed');
         });
     }
 
@@ -1375,13 +1504,16 @@ class CricketGame {
             this.scene.add(this.cricketBall);
             
             console.log('✅ Cricket ball loaded successfully!');
+            
+            // ✅ NEW: Mark cricket ball loading as complete
+            this.completeLoadingStep('Cricket Ball');
         }, (progress) => {
             const percent = Math.round((progress.loaded / progress.total) * 100);
-            if (percent % 25 === 0) {
-                console.log(`Loading ball: ${percent}%`);
-            }
+            // ✅ NEW: Update loading screen with ball progress
+            this.updateLoadingProgress(`🏏 Loading cricket ball... ${percent}%`, percent);
         }, (error) => {
             console.log('❌ Cricket ball loading failed:', error);
+            this.updateLoadingProgress('❌ Cricket ball loading failed');
         });
     }
 
@@ -1390,6 +1522,9 @@ class CricketGame {
         
         // ✅ NEW: Check for bowled FIRST (highest priority wicket)
         this.checkBowledDetection();
+        
+        // ✅ NEW: Check for wicket keeper catch on missed balls
+        this.checkWicketKeeperCatch();
         
         // ✅ NEW: Check for catches FIRST while ball is in flight
         this.checkForActiveCatches();
@@ -1476,7 +1611,7 @@ class CricketGame {
         }
     }
 
-    bowlBall(direction, speed = 15) {
+    bowlBall(direction, speed) {
         if (!this.cricketBall) return;
 
         // Activate the ball state to signal that a new play has begun.
@@ -1500,7 +1635,7 @@ class CricketGame {
         // Set velocity based on direction and speed (add upward component for proper cricket delivery)
         this.ballPhysics.velocity.set(
             direction.x * speed,
-            Math.max(direction.y * speed, 2), // Minimum upward velocity for proper arc
+            direction.y * speed, // Minimum upward velocity for proper arc
             direction.z * speed
         );
         
@@ -2149,6 +2284,77 @@ class CricketGame {
         const collisionRadius = this.batSwing.isSwinging ? 1.5 : 0.35;
         
         return distance < collisionRadius;
+    }
+
+    // ✅ NEW: Check if wicket keeper can catch unhit balls
+    checkWicketKeeperCatch() {
+        // Only check if ball hasn't been hit by batsman and keeper exists
+        if (!this.keeper || 
+            !this.cricketBall || 
+            !this.ballPhysics.isMoving ||
+            this.cricketScore.ballHasBeenHit) {
+            return;
+        }
+
+        const ballPos = this.cricketBall.position;
+        const keeperPos = this.keeper.position;
+        const ballHeight = ballPos.y;
+        
+        // Check if ball is at reasonable height for keeper (0.5m to 3m)
+        if (ballHeight < 0.5 || ballHeight > 3.0) {
+            return;
+        }
+        
+        // Check if ball has passed batsman's end (z > 10) - keeper behind stumps
+        if (ballPos.z < 10) {
+            return;
+        }
+        
+        // Calculate distance between ball and keeper
+        const distance = ballPos.distanceTo(keeperPos);
+        
+        // Keeper has a good reach - 3 meter radius for catching missed balls
+        const keeperCatchRadius = 3.0;
+        
+        if (distance <= keeperCatchRadius) {
+            console.log(`🧤 Wicket Keeper caught the ball! Distance: ${distance.toFixed(1)}m`);
+            this.executeWicketKeeperCatch();
+        }
+    }
+
+    executeWicketKeeperCatch() {
+        console.log(`🧤 Wicket Keeper collected the ball cleanly - Dot ball!`);
+        
+        // Stop ball movement immediately
+        this.ballPhysics.isMoving = false;
+        this.ballPhysics.velocity.set(0, 0, 0);
+        
+        // Position ball in keeper's hands
+        if (this.keeper) {
+            this.cricketBall.position.copy(this.keeper.position);
+            this.cricketBall.position.y += 1.5; // Hand height
+        }
+        
+        // Clear ball trail for clean visual
+        this.clearBallTrail();
+        
+        // Stop any running (though unlikely for missed balls)
+        this.runningSystem.isRunning = false;
+        this.runningSystem.runState = 'idle';
+        
+        // Complete the ball as dot ball (0 runs)
+        if (this.ballState.isActive && !this.ballState.isComplete) {
+            this.ballState.ballType = 'fielded';
+            this.ballState.completionReason = 'keeper_catch';
+            this.ballState.runsThisBall = 0; // Dot ball - no runs
+            
+            // Complete the ball immediately
+            setTimeout(() => {
+                this.completeBall();
+            }, 800);
+        }
+        
+        console.log(`📊 Dot ball - Keeper catch. Score remains: ${this.cricketScore.runs}/${this.cricketScore.wickets}`);
     }
 
     // ✅ NEW: Check if ball hits the stumps for a bowled dismissal
@@ -3914,7 +4120,12 @@ class CricketGame {
             // For wickets, runs were already set by successfulCatch, and wicket count was already incremented
             console.log(`🎯 Completing wicket ball: ${this.ballState.runsThisBall} runs (wicket already counted)`);
             
-            // ✅ NEW: Record dismissal for scorecard
+            // ✅ FIXED: Update dismissed batsman's balls faced BEFORE promoting next batsman
+            const dismissedBatsman = this.battingTeam.players[this.battingTeam.currentBatsman];
+            dismissedBatsman.ballsFaced++;
+            console.log(`📊 ${dismissedBatsman.name}: WICKET (${dismissedBatsman.ballsFaced} balls) - updating BEFORE promotion`);
+            
+            // ✅ NEW: Record dismissal for scorecard (this will promote next batsman)
             if (this.ballState.completionReason === 'run_out') {
                 this.recordDismissal('run out');
             } else if (this.ballState.completionReason === 'caught') {
@@ -3928,19 +4139,12 @@ class CricketGame {
                 this.ballState.runsThisBall = this.runningSystem.runsCompleted;
             }
             console.log(`🎯 Completing ball: ${this.ballState.runsThisBall} runs (${this.ballState.ballType})`);
+            
+            // ✅ NEW: Update individual batsman stats for non-wicket balls
+            this.updateCurrentBatsmanStats(this.ballState.runsThisBall);
         }
         
         console.log(`🔍 Before adding runs - Current total: ${this.cricketScore.runs}/${this.cricketScore.wickets}`);
-
-        // ✅ NEW: Update individual batsman stats (only if not a wicket ball)
-        if (this.ballState.ballType !== 'wicket') {
-            this.updateCurrentBatsmanStats(this.ballState.runsThisBall);
-        } else {
-            // For wicket balls, just update balls faced (no runs)
-            const currentBatsman = this.battingTeam.players[this.battingTeam.currentBatsman];
-            currentBatsman.ballsFaced++;
-            console.log(`📊 ${currentBatsman.name}: WICKET (${currentBatsman.ballsFaced} balls)`);
-        }
         
         // ✅ NEW: Handle batsmen swapping on odd runs (1, 3, 5 runs)
         if (this.ballState.runsThisBall % 2 === 1 && this.ballState.ballType !== 'wicket') {
@@ -4206,6 +4410,26 @@ class CricketGame {
 
     handleBoundaryScoring() {
         if (this.cricketScore.boundaryAwarded) return;
+
+        // ✅ CRICKET RULES: Only award boundary runs if ball was hit by batsman
+        if (!this.cricketScore.ballHasBeenHit) {
+            console.log('🚫 Ball crossed boundary but was NOT hit by batsman - no runs awarded');
+            
+            // Stop ball physics and complete as dot ball
+            this.ballPhysics.isMoving = false;
+            this.ballPhysics.velocity.set(0, 0, 0);
+            
+            if (this.ballState.isActive && !this.ballState.isComplete) {
+                this.ballState.ballType = 'fielded';
+                this.ballState.completionReason = 'missed_boundary';
+                this.ballState.runsThisBall = 0; // No runs for unhit ball
+                
+                setTimeout(() => {
+                    this.completeBall();
+                }, 500);
+            }
+            return;
+        }
 
         const ballDistance = Math.sqrt(
             this.cricketBall.position.x ** 2 + 
@@ -5033,6 +5257,12 @@ class CricketGame {
         console.log('🏏 Loading cricket team...');
         console.log('🚀 OPTIMIZATION: Loading characters with standingidle.fbx directly for immediate animations');
         
+        // ✅ NEW: Track team loading progress
+        this.teamLoadingState = {
+            totalMembers: 11, // 1 bowler + 1 keeper + 9 fielders
+            loadedMembers: 0
+        };
+        
         // Define standard cricket fielding positions
         const fieldingPositions = [
             { name: 'slip', x: 3, z: 14.5, description: 'First Slip' },
@@ -5059,6 +5289,21 @@ class CricketGame {
         
         console.log('✅ Cricket team loading initiated with optimized standingidle.fbx method');
         console.log('⚡ Loading bowler, keeper, and 9 fielders with immediate idle animations...');
+    }
+
+    // ✅ NEW: Track team member loading completion
+    onTeamMemberLoaded(memberName) {
+        this.teamLoadingState.loadedMembers++;
+        const progress = Math.round((this.teamLoadingState.loadedMembers / this.teamLoadingState.totalMembers) * 100);
+        
+        this.updateLoadingProgress(`👥 Loading cricket team... ${this.teamLoadingState.loadedMembers}/${this.teamLoadingState.totalMembers} (${progress}%)`, progress);
+        
+        console.log(`✅ ${memberName} loaded (${this.teamLoadingState.loadedMembers}/${this.teamLoadingState.totalMembers})`);
+        
+        // Check if all team members are loaded
+        if (this.teamLoadingState.loadedMembers >= this.teamLoadingState.totalMembers) {
+            this.completeLoadingStep('Cricket Team');
+        }
     }
 
     loadBowler() {
@@ -5097,6 +5342,9 @@ class CricketGame {
             this.createBowlerCatchZone();
             
             console.log('✅ Bowler loaded with immediate idle animation and catch zone');
+            
+            // ✅ NEW: Mark bowler as loaded
+            this.onTeamMemberLoaded('Bowler');
         }, undefined, (error) => {
             console.log('⚠️ standingidle.fbx failed for bowler, falling back to character.fbx + animation loading:', error);
             // Fallback to original method
@@ -5244,6 +5492,9 @@ class CricketGame {
             this.scene.add(character);
             
             console.log('✅ Wicket keeper loaded and positioned');
+            
+            // ✅ NEW: Mark keeper as loaded
+            this.onTeamMemberLoaded('Wicket Keeper');
         }, undefined, (error) => {
             console.log('⚠️ standingidle.fbx failed for keeper, falling back to character.fbx + animation loading:', error);
             // Fallback to original method
@@ -5292,6 +5543,9 @@ class CricketGame {
             this.scene.add(character);
             
             console.log(`✅ ${position.description} loaded with immediate idle animation at (${position.x}, ${position.z})`);
+            
+            // ✅ NEW: Mark fielder as loaded
+            this.onTeamMemberLoaded(position.description);
         }, undefined, (error) => {
             console.log(`⚠️ standingidle.fbx failed for ${position.description}, falling back to character.fbx + animation loading:`, error);
             // Fallback to original method
@@ -5798,7 +6052,7 @@ class CricketGame {
                     break;
                 case 'Digit0':
                     // Bowl a Bouncer
-                    this.bowlBall(new THREE.Vector3(0, 1, 1), 20);
+                    this.bowlBall(new THREE.Vector3(-0.05, -0.5, 1.5), 25);
                     break;
                 case 'KeyQ':
                     // Defensive shot
