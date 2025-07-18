@@ -84,7 +84,7 @@ class CricketGame {
         this.shotTypes = {
             // Straight shots
             defensive: { power: 0.3, direction: [0, 0, -1], height: 0.1, description: 'Defensive Block' },
-            straightDrive: { power: 1.5, direction: [0, 0, -1], height: 0.2, description: 'Straight Drive' },
+            straightDrive: { power: 1.7, direction: [0, 0, -1], height: 0.5, description: 'Straight Drive' },
             loftedStraight: { power: 2.5, direction: [0, 0, -1], height: 0.6, description: 'Lofted Straight' },
             
             // Off-side shots (right side for right-handed batsman) - Positive X
@@ -96,7 +96,7 @@ class CricketGame {
             // Leg-side shots (left side for right-handed batsman) - Negative X
             pullShot: { power: 2.2, direction: [-1, 0, -0.3], height: 0.3, description: 'Pull Shot' },
             hookShot: { power: 2.4, direction: [-0.9, 0, 0.3], height: 0.4, description: 'Hook Shot' },
-            legGlance: { power: 1.2, direction: [-0.6, 0, 0.8], height: 0.1, description: 'Leg Glance' },
+            legGlance: { power: 1.5, direction: [-0.6, 0, 0.8], height: 0.1, description: 'Leg Glance' },
             onDrive: { power: 1.6, direction: [-0.7, 0, -0.7], height: 0.2, description: 'On Drive' },
             
             // Behind wicket shots - Positive Z
@@ -140,7 +140,7 @@ class CricketGame {
                 'straight': ['Mid Off', 'Mid On'],
                 'offSide': ['Cover', 'Point', 'Gully', 'Third Man'],
                 'legSide': ['Square Leg', 'Fine Leg', 'Mid On'],
-                'behind': ['First Slip', 'Third Man', 'Fine Leg']
+                'behind': ['First Slip', 'Fine Leg']
             },
             // Catching system
             catchingSystem: {
@@ -279,6 +279,28 @@ class CricketGame {
             stumpsAtBatsmanEnd: [], // Will store references to batsman's stumps
             stumpCollisionRadius: 0.25, // More generous collision radius around stumps (25cm)
             enabled: true
+        };
+
+        // ✅ NEW: Fielder positioning system
+        this.fielderPositioning = {
+            isActive: false, // Whether we're in fielding mode
+            selectedFielder: null, // Currently selected fielder for moving
+            isDragging: false, // Whether we're currently dragging a fielder
+            dragStartPosition: new THREE.Vector3(),
+            defaultPositions: new Map(), // Store original positions
+            customPositions: new Map(), // Store custom positions
+            mousePosition: new THREE.Vector2(),
+            raycaster: new THREE.Raycaster(),
+            camera: null, // Reference to camera for ray casting
+            
+            // Visual indicators
+            selectionIndicator: null, // Highlight ring around selected fielder
+            positionIndicators: [], // Array of position indicator objects
+            
+            // Validation settings
+            boundaryBuffer: 5, // Minimum distance from boundary (meters)
+            minDistanceFromBatsman: 10, // Minimum distance from batsman (meters)
+            minDistanceBetweenFielders: 3 // Minimum distance between fielders (meters)
         };
     }
 
@@ -1859,21 +1881,26 @@ class CricketGame {
             bottom: 20px;
             right: 20px;
             background: rgba(10, 10, 26, 0.9);
-            color: #7490ff;
+            color: white;
             border: 2px solid rgba(116, 144, 255, 0.4);
             border-radius: 20px;
             padding: 15px 25px;
-            font-family: 'Orbitron', Arial, sans-serif;
+            font-family: 'Rajdhani', Arial, sans-serif;
             font-size: 16px;
-            font-weight: 700;
+            font-weight: 600;
             cursor: pointer;
-            z-index: 1000;
+            z-index: 9999;
             transition: all 0.3s ease;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-            text-shadow: 0 0 10px rgba(116, 144, 255, 0.5);
-            letter-spacing: 1px;
+            letter-spacing: 0.5px;
             text-transform: uppercase;
+            backdrop-filter: blur(10px);
+            overflow: hidden;
+            display: block;
+            visibility: visible;
         `;
+        
+        // Simplified - no shimmer for scorecard button to avoid positioning conflicts
         
         // Hover effects
         button.addEventListener('mouseenter', () => {
@@ -1881,6 +1908,7 @@ class CricketGame {
             button.style.borderColor = 'rgba(116, 144, 255, 0.8)';
             button.style.transform = 'scale(1.05)';
             button.style.boxShadow = '0 6px 25px rgba(116, 144, 255, 0.4)';
+            button.style.color = '#7490ff';
         });
         
         button.addEventListener('mouseleave', () => {
@@ -1888,6 +1916,7 @@ class CricketGame {
             button.style.borderColor = 'rgba(116, 144, 255, 0.4)';
             button.style.transform = 'scale(1)';
             button.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.3)';
+            button.style.color = 'white';
         });
         
         // Toggle scorecard visibility
@@ -1897,6 +1926,11 @@ class CricketGame {
         
         document.body.appendChild(button);
         this.scorecardUI.button = button;
+        
+        console.log('✅ Scorecard button created and added to page');
+        console.log('Button position:', button.style.position);
+        console.log('Button display:', button.style.display);
+        console.log('Button z-index:', button.style.zIndex);
     }
 
     createScorecardContainer() {
@@ -1906,18 +1940,18 @@ class CricketGame {
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.95);
+            background: rgba(10, 10, 26, 0.95);
             color: white;
-            border: 3px solid #4ecdc4;
-            border-radius: 15px;
-            padding: 20px;
-            font-family: Arial, sans-serif;
+            border: 3px solid rgba(116, 144, 255, 0.6);
+            border-radius: 20px;
+            padding: 30px;
+            font-family: 'Rajdhani', Arial, sans-serif;
             z-index: 2000;
             max-width: 90%;
             max-height: 90%;
             overflow-y: auto;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            backdrop-filter: blur(10px);
+            box-shadow: 0 10px 40px rgba(116, 144, 255, 0.3);
+            backdrop-filter: blur(15px);
             display: none;
         `;
         
@@ -1934,7 +1968,7 @@ class CricketGame {
         if (this.scorecardUI.isVisible) {
             this.updateScorecardDisplay(); // Refresh data
             this.scorecardUI.container.style.display = 'block';
-            this.scorecardUI.button.innerHTML = '❌ CLOSE';
+            this.scorecardUI.button.innerHTML = '✖ CLOSE';
         } else {
             this.scorecardUI.container.style.display = 'none';
             this.scorecardUI.button.innerHTML = '📊 SCORECARD';
@@ -1954,30 +1988,30 @@ class CricketGame {
         // Generate scorecard HTML
         const html = `
             <div style="text-align: center; margin-bottom: 20px;">
-                <h2 style="margin: 0; color: #4ecdc4; font-size: 24px;">${team.teamName}</h2>
+                <h2 style="margin: 0; color: #7490ff; font-size: 24px; font-family: 'Orbitron', Arial, sans-serif;">${team.teamName}</h2>
                 <p style="margin: 5px 0; color: #ccc;">${team.matchDetails}</p>
                 <h3 style="margin: 10px 0; color: #fff;">1st Innings</h3>
             </div>
             
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 10px; background: rgba(78, 205, 196, 0.1); border-radius: 8px;">
-                <div style="color: #4ecdc4; font-weight: bold;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 10px; background: rgba(116, 144, 255, 0.1); border-radius: 8px;">
+                <div style="color: #7490ff; font-weight: bold;">
                     RUNS: ${score.runs}
                 </div>
-                <div style="color: #4ecdc4; font-weight: bold;">
+                <div style="color: #7490ff; font-weight: bold;">
                     BALLS: ${score.balls}
                 </div>
-                <div style="color: #4ecdc4; font-weight: bold;">
+                <div style="color: #7490ff; font-weight: bold;">
                     TOTAL: ${score.runs}/${score.wickets}
                 </div>
             </div>
             
             <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
                 <thead>
-                    <tr style="background: rgba(78, 205, 196, 0.2);">
-                        <th style="text-align: left; padding: 8px; border-bottom: 2px solid #4ecdc4;">Batsman</th>
-                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #4ecdc4;">How Out</th>
-                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #4ecdc4;">Runs</th>
-                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #4ecdc4;">Balls</th>
+                    <tr style="background: rgba(116, 144, 255, 0.2);">
+                        <th style="text-align: left; padding: 8px; border-bottom: 2px solid #7490ff;">Batsman</th>
+                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #7490ff;">How Out</th>
+                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #7490ff;">Runs</th>
+                        <th style="text-align: center; padding: 8px; border-bottom: 2px solid #7490ff;">Balls</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1987,7 +2021,7 @@ class CricketGame {
             
             <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
                 <div>
-                    <strong style="color: #4ecdc4;">EXTRAS</strong>
+                    <strong style="color: #7490ff;">EXTRAS</strong>
                     <div style="margin-left: 20px; color: #ccc;">
                         ${extrasTotal > 0 ? `
                             ${team.extras.byes > 0 ? `b: ${team.extras.byes}<br>` : ''}
@@ -1999,21 +2033,21 @@ class CricketGame {
                     </div>
                 </div>
                 <div style="text-align: right;">
-                    <strong style="color: #4ecdc4;">${extrasTotal}</strong>
+                    <strong style="color: #7490ff;">${extrasTotal}</strong>
                 </div>
             </div>
             
-            <div style="text-align: center; padding: 15px; background: rgba(78, 205, 196, 0.1); border-radius: 8px; font-size: 18px; font-weight: bold;">
-                <span style="color: #4ecdc4;">TOTAL</span>
+            <div style="text-align: center; padding: 15px; background: rgba(116, 144, 255, 0.1); border: 2px solid rgba(116, 144, 255, 0.3); border-radius: 8px; font-size: 18px; font-weight: bold;">
+                <span style="color: #7490ff;">TOTAL</span>
                 <span style="color: white; margin-left: 20px;">${score.runs}/${score.wickets} (${score.overs.toFixed(1)} overs)</span>
             </div>
             
             <div style="text-align: center; margin-top: 15px;">
                 <div style="font-size: 14px; color: #ccc;">
                     Current Batsmen: 
-                    <span style="color: #4ecdc4;">${team.players[team.currentBatsman].name}</span>
+                    <span style="color: #7490ff;">${team.players[team.currentBatsman].name}</span>
                     ${!team.players[team.currentPartner].isOut ? 
-                        ` & <span style="color: #4ecdc4;">${team.players[team.currentPartner].name}</span>` : 
+                        ` & <span style="color: #7490ff;">${team.players[team.currentPartner].name}</span>` : 
                         ' & Next Batsman'
                     }
                 </div>
@@ -4351,7 +4385,7 @@ class CricketGame {
         // Clear ball trail completely
         this.clearBallTrail();
         
-        // Reset fielders to original positions
+        // Reset fielders to original positions (which now includes custom positions)
         if (this.fielders) {
             this.fielders.forEach(fielder => {
                 const originalPos = this.fieldingSystem.fielderOriginalPositions.get(fielder.userData.description);
@@ -4359,6 +4393,8 @@ class CricketGame {
                     fielder.position.set(originalPos.x, originalPos.y, originalPos.z);
                     fielder.rotation.set(0, 0, 0);
                     fielder.lookAt(0, 0, 5); // Face batsman
+                    
+                    console.log(`🔄 Reset ${fielder.userData.description} to position (${originalPos.x.toFixed(1)}, ${originalPos.z.toFixed(1)})`);
                     
                     // Clear all fielding flags
                     fielder.userData.isRunningForAnticipation = false;
@@ -5303,6 +5339,11 @@ class CricketGame {
         // Check if all team members are loaded
         if (this.teamLoadingState.loadedMembers >= this.teamLoadingState.totalMembers) {
             this.completeLoadingStep('Cricket Team');
+            
+            // ✅ NEW: Initialize fielder positioning after team is loaded
+            setTimeout(() => {
+                this.initializeFielderPositioning();
+            }, 1000); // Small delay to ensure all positions are set
         }
     }
 
@@ -5912,7 +5953,7 @@ class CricketGame {
 
     playFielderAnimation(fieldingPosition, animationName) {
         const fielder = this.fielders.find(f => 
-            f.userData && f.userData.fieldingPosition === fieldingPosition
+            f.userData && f.userData.description === fieldingPosition
         );
         return this.playCricketPlayerAnimation(fielder, animationName);
     }
@@ -6147,6 +6188,33 @@ class CricketGame {
                 this.character.position.x = Math.max(-this.FIELD_RADIUS + 5, Math.min(this.FIELD_RADIUS - 5, this.character.position.x));
                 this.character.position.z = Math.max(-this.FIELD_RADIUS + 5, Math.min(this.FIELD_RADIUS - 5, this.character.position.z));
             }
+        });
+
+        // ✅ NEW: Mouse event listeners for fielder positioning
+        document.addEventListener('mousedown', (event) => {
+            if (!this.fielderPositioning.isActive) return;
+            
+            this.fielderPositioning.mousePosition.x = (event.clientX / window.innerWidth) * 2 - 1;
+            this.fielderPositioning.mousePosition.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            this.handleFielderSelection(event);
+        });
+
+        document.addEventListener('mousemove', (event) => {
+            if (!this.fielderPositioning.isActive) return;
+            
+            this.fielderPositioning.mousePosition.x = (event.clientX / window.innerWidth) * 2 - 1;
+            this.fielderPositioning.mousePosition.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            if (this.fielderPositioning.isDragging && this.fielderPositioning.selectedFielder) {
+                this.handleFielderDrag();
+            }
+        });
+
+        document.addEventListener('mouseup', (event) => {
+            if (!this.fielderPositioning.isActive) return;
+            
+            this.handleFielderDrop();
         });
     }
 
@@ -6458,6 +6526,319 @@ class CricketGame {
         
         // Ensure probability is between 0 and 1
         return Math.max(0, Math.min(1, catchProbability));
+    }
+
+    // ✅ NEW: Fielder Positioning System Methods
+
+    initializeFielderPositioning() {
+        // Store default positions for all fielders
+        this.fielders.forEach((fielder, index) => {
+            if (fielder && fielder.position && fielder.userData && fielder.userData.description) {
+                const defaultPos = fielder.position.clone();
+                this.fielderPositioning.defaultPositions.set(fielder.userData.description, defaultPos);
+                this.fielderPositioning.customPositions.set(fielder.userData.description, defaultPos.clone());
+                console.log(`📍 Stored default position for ${fielder.userData.description}: (${defaultPos.x.toFixed(1)}, ${defaultPos.z.toFixed(1)})`);
+            }
+        });
+        
+        // Create selection indicator (glowing ring)
+        const ringGeometry = new THREE.RingGeometry(1.5, 2.0, 16);
+        const ringMaterial = new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            transparent: true,
+            opacity: 0.6,
+            side: THREE.DoubleSide
+        });
+        
+        this.fielderPositioning.selectionIndicator = new THREE.Mesh(ringGeometry, ringMaterial);
+        this.fielderPositioning.selectionIndicator.rotation.x = -Math.PI / 2; // Lay flat on ground
+        this.fielderPositioning.selectionIndicator.visible = false;
+        this.scene.add(this.fielderPositioning.selectionIndicator);
+        
+        // Set up UI event listeners
+        this.setupFieldingUIListeners();
+        
+        console.log('✅ Fielder positioning system initialized');
+    }
+
+    setupFieldingUIListeners() {
+        const fieldingModeBtn = document.getElementById('fieldingModeBtn');
+        const resetFieldingBtn = document.getElementById('resetFieldingBtn');
+        const exitFieldingBtn = document.getElementById('exitFieldingBtn');
+        
+        if (fieldingModeBtn) {
+            fieldingModeBtn.addEventListener('click', () => {
+                this.enterFieldingMode();
+            });
+        }
+        
+        if (resetFieldingBtn) {
+            resetFieldingBtn.addEventListener('click', () => {
+                this.resetFielderPositions();
+            });
+        }
+        
+        if (exitFieldingBtn) {
+            exitFieldingBtn.addEventListener('click', () => {
+                this.exitFieldingMode();
+            });
+        }
+    }
+
+    enterFieldingMode() {
+        this.fielderPositioning.isActive = true;
+        this.fielderPositioning.camera = this.camera; // Store camera reference
+        
+        // Update UI
+        document.getElementById('fieldingModeBtn').style.display = 'none';
+        document.getElementById('resetFieldingBtn').style.display = 'block';
+        document.getElementById('exitFieldingBtn').style.display = 'block';
+        
+        // Add visual indicators to all fielders
+        this.addFielderIndicators();
+        
+        // Pause ball physics if active
+        if (this.ballPhysics.isMoving) {
+            this.ballPhysics.isMoving = false;
+            this.ballPhysics.velocity.set(0, 0, 0);
+            console.log('⏸️ Ball physics paused for fielding mode');
+        }
+        
+        console.log('🎯 Entered fielding mode');
+    }
+
+    exitFieldingMode() {
+        this.fielderPositioning.isActive = false;
+        this.fielderPositioning.selectedFielder = null;
+        this.fielderPositioning.isDragging = false;
+        
+        // Update UI
+        document.getElementById('fieldingModeBtn').style.display = 'block';
+        document.getElementById('resetFieldingBtn').style.display = 'none';
+        document.getElementById('exitFieldingBtn').style.display = 'none';
+        
+        // Remove visual indicators
+        this.removeFielderIndicators();
+        this.fielderPositioning.selectionIndicator.visible = false;
+        
+        // Update fielding zones with new positions
+        this.updateFieldingZones();
+        
+        console.log('✅ Exited fielding mode');
+    }
+
+    resetFielderPositions() {
+        // Reset all fielders to default positions
+        this.fielders.forEach((fielder) => {
+            if (fielder && fielder.userData && fielder.userData.description) {
+                const defaultPos = this.fielderPositioning.defaultPositions.get(fielder.userData.description);
+                if (defaultPos) {
+                    fielder.position.copy(defaultPos);
+                    this.fielderPositioning.customPositions.set(fielder.userData.description, defaultPos.clone());
+                    
+                    // ✅ Also update the original positions map for consistency
+                    this.fieldingSystem.fielderOriginalPositions.set(fielder.userData.description, defaultPos.clone());
+                    
+                    console.log(`🔄 Reset ${fielder.userData.description} to default position`);
+                }
+            }
+        });
+        
+        // Update position indicators if visible
+        this.updatePositionIndicators();
+        
+        console.log('🔄 Reset all fielders to default positions');
+    }
+
+    addFielderIndicators() {
+        // Add hover/selection indicators to all fielders
+        this.fielders.forEach((fielder) => {
+            if (fielder) {
+                // Create position indicator ring
+                const ringGeometry = new THREE.RingGeometry(0.8, 1.2, 12);
+                const ringMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x4444ff,
+                    transparent: true,
+                    opacity: 0.4,
+                    side: THREE.DoubleSide
+                });
+                
+                const indicator = new THREE.Mesh(ringGeometry, ringMaterial);
+                indicator.rotation.x = -Math.PI / 2;
+                indicator.position.copy(fielder.position);
+                indicator.position.y = 0.1; // Slightly above ground
+                
+                indicator.userData.isFielderIndicator = true;
+                indicator.userData.parentFielder = fielder;
+                
+                this.scene.add(indicator);
+                this.fielderPositioning.positionIndicators.push(indicator);
+            }
+        });
+    }
+
+    removeFielderIndicators() {
+        this.fielderPositioning.positionIndicators.forEach(indicator => {
+            this.scene.remove(indicator);
+            if (indicator.geometry) indicator.geometry.dispose();
+            if (indicator.material) indicator.material.dispose();
+        });
+        this.fielderPositioning.positionIndicators = [];
+    }
+
+    updatePositionIndicators() {
+        // Update position indicator positions to match fielders
+        this.fielderPositioning.positionIndicators.forEach(indicator => {
+            if (indicator.userData.parentFielder) {
+                indicator.position.copy(indicator.userData.parentFielder.position);
+                indicator.position.y = 0.1;
+            }
+        });
+    }
+
+    handleFielderSelection(event) {
+        this.fielderPositioning.raycaster.setFromCamera(this.fielderPositioning.mousePosition, this.camera);
+        
+        // Check for fielder intersections
+        const intersects = this.fielderPositioning.raycaster.intersectObjects(this.fielders, true);
+        
+        if (intersects.length > 0) {
+            // Find the fielder object (might be nested in the model)
+            let selectedFielder = null;
+            for (let intersect of intersects) {
+                let obj = intersect.object;
+                while (obj && !obj.userData.description) {
+                    obj = obj.parent;
+                }
+                if (obj && obj.userData.description) {
+                    selectedFielder = obj;
+                    break;
+                }
+            }
+            
+            if (selectedFielder) {
+                this.fielderPositioning.selectedFielder = selectedFielder;
+                this.fielderPositioning.isDragging = true;
+                this.fielderPositioning.dragStartPosition.copy(selectedFielder.position);
+                
+                // Show selection indicator
+                this.fielderPositioning.selectionIndicator.position.copy(selectedFielder.position);
+                this.fielderPositioning.selectionIndicator.position.y = 0.2;
+                this.fielderPositioning.selectionIndicator.visible = true;
+                
+                // Disable camera controls during drag
+                this.controls.enabled = false;
+                
+                console.log(`🎯 Selected fielder: ${selectedFielder.userData.description}`);
+            }
+        }
+    }
+
+    handleFielderDrag() {
+        if (!this.fielderPositioning.selectedFielder) return;
+        
+        // Cast ray to ground plane
+        this.fielderPositioning.raycaster.setFromCamera(this.fielderPositioning.mousePosition, this.camera);
+        
+        // Create ground plane for intersection
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        const intersection = new THREE.Vector3();
+        
+        if (this.fielderPositioning.raycaster.ray.intersectPlane(groundPlane, intersection)) {
+            // Validate position
+            const validPosition = this.validateFielderPosition(intersection);
+            
+            if (validPosition) {
+                this.fielderPositioning.selectedFielder.position.copy(intersection);
+                this.fielderPositioning.selectionIndicator.position.copy(intersection);
+                this.fielderPositioning.selectionIndicator.position.y = 0.2;
+                
+                // Update indicator color based on validity
+                this.fielderPositioning.selectionIndicator.material.color.setHex(0x00ff00); // Green for valid
+            } else {
+                // Red for invalid position
+                this.fielderPositioning.selectionIndicator.material.color.setHex(0xff0000);
+            }
+        }
+    }
+
+    handleFielderDrop() {
+        if (this.fielderPositioning.selectedFielder) {
+            const finalPosition = this.fielderPositioning.selectedFielder.position.clone();
+            
+            if (!this.validateFielderPosition(finalPosition)) {
+                // Invalid position - revert to start
+                this.fielderPositioning.selectedFielder.position.copy(this.fielderPositioning.dragStartPosition);
+                console.log('❌ Invalid fielder position - reverted to original');
+            } else {
+                // Valid position - save it
+                const fieldingPosition = this.fielderPositioning.selectedFielder.userData.description;
+                this.fielderPositioning.customPositions.set(fieldingPosition, finalPosition.clone());
+                
+                // ✅ CRITICAL FIX: Immediately update the original positions map
+                // This ensures that resetPlayersForNextBall() uses the new custom position
+                this.fieldingSystem.fielderOriginalPositions.set(fieldingPosition, finalPosition.clone());
+                
+                console.log(`✅ Moved ${fieldingPosition} to new position and updated original position map`);
+            }
+            
+            // Update position indicators
+            this.updatePositionIndicators();
+            
+            // Reset drag state
+            this.fielderPositioning.selectedFielder = null;
+            this.fielderPositioning.isDragging = false;
+            this.fielderPositioning.selectionIndicator.visible = false;
+            
+            // Re-enable camera controls
+            this.controls.enabled = true;
+        }
+    }
+
+    validateFielderPosition(position) {
+        // Check boundary limits
+        const distanceFromCenter = Math.sqrt(position.x * position.x + position.z * position.z);
+        if (distanceFromCenter > (this.FIELD_RADIUS - this.fielderPositioning.boundaryBuffer)) {
+            return false;
+        }
+        
+        // Check minimum distance from batsman (at 0, 0, 9)
+        const batsmanPosition = new THREE.Vector3(0, 0, 9);
+        const distanceFromBatsman = position.distanceTo(batsmanPosition);
+        if (distanceFromBatsman < this.fielderPositioning.minDistanceFromBatsman) {
+            return false;
+        }
+        
+        // Check minimum distance from other fielders
+        for (let fielder of this.fielders) {
+            if (fielder && fielder !== this.fielderPositioning.selectedFielder) {
+                const distance = position.distanceTo(fielder.position);
+                if (distance < this.fielderPositioning.minDistanceBetweenFielders) {
+                    return false;
+                }
+            }
+        }
+        
+        return true;
+    }
+
+    updateFieldingZones() {
+        // Recalculate which fielders are in which zones based on new positions
+        // This will be called when exiting fielding mode
+        
+        // Update fielder original positions map for the return-to-position system
+        this.fielders.forEach((fielder) => {
+            if (fielder && fielder.userData && fielder.userData.description) {
+                const customPosition = this.fielderPositioning.customPositions.get(fielder.userData.description);
+                if (customPosition) {
+                    // Update the original positions map used by the reset system
+                    this.fieldingSystem.fielderOriginalPositions.set(fielder.userData.description, customPosition.clone());
+                    console.log(`🎯 Updated ${fielder.userData.description} original position to custom position`);
+                }
+            }
+        });
+        
+        console.log('🔄 Updated fielding zones with new positions');
     }
 }
 
