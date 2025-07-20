@@ -150,7 +150,7 @@ class CricketGame {
             RE_EVAL_INTERVAL_MS: 250,
             HANDOVER_MARGIN_SEC: 1.5, // ✅ FIX: Increased to reduce unnecessary handovers
             HANDOVER_COOLDOWN_MS: 500,
-            MAX_CATCH_INTERCEPT_DIST: 25,
+            MAX_CATCH_INTERCEPT_DIST: 40, // ✅ INCREASED: Allow deep fielders to attempt catches
             DEFAULT_TOP_SPEED: 8.0,
             MIN_AERIAL_HEIGHT: 1.5,
             KEEPER_BOWLER_PRIORITY_RADIUS: 15,
@@ -211,7 +211,8 @@ class CricketGame {
             lastBoundaryType: null, // 'four' or 'six'
             ballHasBounced: false,
             boundaryAwarded: false,
-            ballHasBeenHit: false // ✅ Track if ball has been hit (for bounce detection)
+            ballHasBeenHit: false, // ✅ Track if ball has been hit (for bounce detection)
+            firstBounceTime: null // ✅ Track when ball first bounced (for safety timeout)
         };
 
         // Target chase system
@@ -1890,6 +1891,39 @@ class CricketGame {
         // Update predictive fielding for any remaining fielders
         this.updatePredictiveFielding();
         
+        // ✅ SAFETY: Force-complete ball if it's been bouncing for too long without being fielded
+        if (this.cricketScore.ballHasBounced && this.cricketScore.firstBounceTime) {
+            const bounceDuration = Date.now() - this.cricketScore.firstBounceTime;
+            
+            // ✅ ADDITIONAL SAFETY: If ball bouncing but fielding not active, activate it first
+            if (bounceDuration > 1000 && !this.fieldingSystem.ballIsHit) { // 1 second grace period
+                console.log(`🚨 SAFETY: Ball bouncing for ${(bounceDuration/1000).toFixed(1)}s but fielding inactive - activating fielding system`);
+                this.fieldingSystem.ballIsHit = true;
+                this.fieldingSystem.shotDirection = 'straight'; // Default for missed balls
+                this.fieldingSystem.nextSelectionTime = Date.now(); // Skip debounce
+            }
+            
+            if (bounceDuration > 5000) { // 5 seconds of bouncing
+                console.log(`⏰ Ball has been bouncing for ${(bounceDuration/1000).toFixed(1)}s without being fielded - forcing completion`);
+                
+                // Stop ball physics
+                this.ballPhysics.isMoving = false;
+                this.ballPhysics.velocity.set(0, 0, 0);
+                
+                // Force complete the ball
+                if (this.ballState.isActive && !this.ballState.isComplete) {
+                    this.ballState.ballType = 'normal';
+                    this.ballState.completionReason = 'timeout';
+                    this.ballState.runsThisBall = this.runningSystem.runsCompleted; // Award any runs completed
+                    
+                    setTimeout(() => {
+                        this.completeBall();
+                    }, 500);
+                }
+                return; // Exit physics update
+            }
+        }
+        
         // Apply gravity
         this.ballPhysics.velocity.y += this.ballPhysics.gravity * deltaTime;
         
@@ -1925,6 +1959,14 @@ class CricketGame {
                 this.ballPhysics.velocity.set(0, 0, 0);
                 this.ballPhysics.isMoving = false;
                 console.log('Ball stopped');
+                
+                // ✅ SAFETY: If ball stopping but fielding not active, try to activate it first
+                if (!this.fieldingSystem.ballIsHit && this.ballState.isActive) {
+                    console.log('🚨 SAFETY: Ball stopping but fielding never activated - forcing fielding activation');
+                    this.fieldingSystem.ballIsHit = true;
+                    this.fieldingSystem.shotDirection = 'straight';
+                    this.fieldingSystem.nextSelectionTime = Date.now();
+                }
                 
                 // If ball stopped and wasn't fielded, complete with current runs
                 if (this.ballState.isActive && !this.ballState.isComplete && 
@@ -3267,7 +3309,7 @@ class CricketGame {
         // ✅ FIX: Check if ball has slowed down significantly - assign nearest fielder to collect it
         const currentBallSpeed = this.ballPhysics.velocity.length();
         if (currentBallSpeed < 1.0) { // Ball nearly stopped
-            console.log('🚫 Ball too slow - assigning nearest fielder to collect stationary ball');
+            console.log(`🚫 Ball too slow (${currentBallSpeed.toFixed(2)}m/s) - assigning nearest fielder to collect stationary ball`);
             this.assignNearestFielderToStationaryBall();
             return;
         }
@@ -3282,7 +3324,7 @@ class CricketGame {
             if (fielderDistanceToBall > 8.0) {
                 const nearbyFielder = this.findNearestIdleFielder(ballPos, fielderDistanceToBall * 0.7); // 30% closer required
                 if (nearbyFielder) {
-                    console.log(`🔄 Ball rolled past ${currentFielder.userData.description} (${fielderDistanceToBall.toFixed(1)}m away) - reassigning to ${nearbyFielder.userData.description} (${nearbyFielder.distance.toFixed(1)}m away)`);
+                    console.log(`🔄 Ball rolled past ${currentFielder.userData.description} (${fielderDistanceToBall.toFixed(1)}m away) - reassigning to ${nearbyFielder.fielder.userData.description} (${nearbyFielder.distance.toFixed(1)}m away)`);
                     this.clearCurrentTask();
                     this.assignFieldingTask(nearbyFielder.fielder, 'ground', now);
                     return;
@@ -3310,7 +3352,20 @@ class CricketGame {
         const ballSpeed = ballVelocity.length();
         const timeToLand = this.calculateTimeToLand();
         
-        console.log(`📊 Ball stats: height=${ballHeight.toFixed(1)}m, speed=${ballSpeed.toFixed(1)}m/s, timeToLand=${timeToLand.toFixed(1)}s`);
+        console.log(`📊 Ball stats: height=${ballHeight.toFixed(1)}m, speed=${ballSpeed.toFixed(1)}m/s, timeToLand=${timeToLand.toFixed(1)}s, bounced=${this.cricketScore.ballHasBounced}`);
+        
+        // ✅ BOUNCED BALL FORCE ASSIGNMENT: If ball has bounced and no fielder assigned, force nearest fielder
+        if (this.cricketScore.ballHasBounced && !this.fieldingSystem.currentTask) {
+            console.log('🏐 Ball has bounced and no fielder assigned - FORCING nearest fielder assignment');
+            const nearestResult = this.findNearestIdleFielder(ballPos);
+            if (nearestResult) {
+                console.log(`🏐 FORCED assignment for bounced ball: ${nearestResult.fielder.userData.description} (${nearestResult.distance.toFixed(1)}m away)`);
+                this.assignFieldingTask(nearestResult.fielder, 'ground', now);
+                return; // Exit early, assignment done
+            } else {
+                console.log('🏐 No idle fielders available for forced bounced ball assignment');
+            }
+        }
         
         // PASS A: Try to find aerial catcher
         const aerialCatcher = this.selectAerialCatcher(ballPos, ballVelocity, ballHeight, timeToLand);
@@ -3347,6 +3402,16 @@ class CricketGame {
             }
         }
         
+        // ✅ BOUNCED BALL SAFETY: If ball has bounced and current task is catch, convert to ground
+        if (this.cricketScore.ballHasBounced && this.fieldingSystem.currentTask && this.fieldingSystem.currentTask.mode === 'catch') {
+            console.log(`🏐 Ball bounced - converting ${this.fieldingSystem.currentTask.fielder.userData.description} from catch to ground chase`);
+            this.fieldingSystem.currentTask.mode = 'ground';
+            this.fieldingSystem.fielderStates.set(this.fieldingSystem.currentTask.fielder.userData.description, 'chasing');
+            this.fieldingSystem.catchingSystem.catchInProgress = false;
+            this.fieldingSystem.catchingSystem.catchingFielder = null;
+            this.fieldingSystem.chasingFielder = this.fieldingSystem.currentTask.fielder;
+        }
+        
         // Update evaluation time regardless
         if (this.fieldingSystem.currentTask) {
             this.fieldingSystem.currentTask.lastEval = now;
@@ -3355,6 +3420,12 @@ class CricketGame {
 
     // ✅ NEW: PASS A - Select aerial catcher
     selectAerialCatcher(ballPos, ballVelocity, ballHeight, timeToLand) {
+        // ✅ CRICKET RULES: Cannot catch for wicket if ball has bounced after being hit
+        if (this.cricketScore.ballHasBounced) {
+            console.log('🚫 Ball has bounced - no aerial catches possible (cricket rules)');
+            return null;
+        }
+        
         // Skip if ball too low for aerial catch
         if (ballHeight < this.fieldingSystem.MIN_AERIAL_HEIGHT) {
             console.log(`⬇️ Ball too low (${ballHeight.toFixed(1)}m) for aerial catch - skipping Pass A`);
@@ -3385,17 +3456,36 @@ class CricketGame {
                 return;
             }
             
-            // Calculate intercept capability
-            const intercept = this.calculateInterceptPoint(fielder, timeToLand);
-            if (!intercept.canReach) return;
+            // ✅ IMPROVED: Use actual ball flight time for aerial catch calculation
+            const aerialTimeAvailable = Math.max(timeToLand, 3.0); // At least 3 seconds for aerial catches
+            const intercept = this.calculateInterceptPoint(fielder, aerialTimeAvailable);
+            
+            // ✅ DEBUG: Show why fielders are excluded
+            if (!intercept.canReach) {
+                console.log(`🚫 ${fielder.userData.description} excluded: cannot reach intercept point (${fielder.position.distanceTo(intercept.position).toFixed(1)}m away, ETA: ${intercept.timeToReach.toFixed(1)}s)`);
+                return;
+            }
             
             // Check if within reasonable intercept distance
             const interceptDist = fielder.position.distanceTo(intercept.position);
-            if (interceptDist > this.fieldingSystem.MAX_CATCH_INTERCEPT_DIST) return;
+            if (interceptDist > this.fieldingSystem.MAX_CATCH_INTERCEPT_DIST) {
+                console.log(`🚫 ${fielder.userData.description} excluded: intercept too far (${interceptDist.toFixed(1)}m > ${this.fieldingSystem.MAX_CATCH_INTERCEPT_DIST}m limit)`);
+                return;
+            }
             
             // Calculate catch probability
             const catchProb = this.calculateCatchProbability(fielder, ballPos, ballVelocity, interceptDist);
-            if (catchProb < 0.15) return; // Minimum 15% chance
+            
+            // ✅ IMPROVED: Lower threshold for deep fielders (prevent boundaries)
+            const isDeepFielder = interceptDist > 25;
+            const minCatchProb = isDeepFielder ? 0.08 : 0.15; // 8% for deep, 15% for close
+            
+            if (catchProb < minCatchProb) {
+                console.log(`🚫 ${fielder.userData.description} excluded: catch probability too low (${(catchProb*100).toFixed(1)}% < ${(minCatchProb*100).toFixed(1)}% threshold)`);
+                return;
+            }
+            
+            console.log(`✅ ${fielder.userData.description} VIABLE: ${interceptDist.toFixed(1)}m away, ${(catchProb*100).toFixed(1)}% chance, ETA: ${intercept.timeToReach.toFixed(1)}s${isDeepFielder ? ' (DEEP FIELDER)' : ''}`);
             
             candidates.push({
                 fielder,
@@ -3434,7 +3524,8 @@ class CricketGame {
         });
         
         const winner = candidates[0];
-        console.log(`✅ Pass A winner: ${winner.fielder.userData.description} (ETA: ${winner.eta.toFixed(1)}s, Prob: ${(winner.catchProb*100).toFixed(1)}%)`);
+        const isWinnerDeep = winner.intercept.position.distanceTo(winner.fielder.position) > 25;
+        console.log(`✅ Pass A winner: ${winner.fielder.userData.description} (ETA: ${winner.eta.toFixed(1)}s, Prob: ${(winner.catchProb*100).toFixed(1)}%)${isWinnerDeep ? ' - DEEP FIELDER CATCH!' : ''}`);
         
         return winner;
     }
@@ -3889,6 +3980,8 @@ class CricketGame {
 
     // ✅ NEW: Assign nearest fielder to collect stationary ball
     assignNearestFielderToStationaryBall() {
+        console.log('🔍 assignNearestFielderToStationaryBall() called');
+        
         if (!this.cricketBall || !this.fielders || this.fielders.length === 0) {
             console.log('❌ Cannot assign fielder - missing ball or fielders');
             this.forceCompleteBall();
@@ -3897,6 +3990,8 @@ class CricketGame {
 
         // Find the nearest fielder to the ball (regardless of current state)
         const ballPos = this.cricketBall.position.clone();
+        console.log(`🔍 Ball position: (${ballPos.x.toFixed(1)}, ${ballPos.y.toFixed(1)}, ${ballPos.z.toFixed(1)})`);
+        
         const nearestResult = this.findNearestFielder(ballPos);
 
         if (!nearestResult) {
@@ -3906,6 +4001,14 @@ class CricketGame {
         }
 
         const { fielder: nearestFielder, distance: shortestDistance } = nearestResult;
+        
+        // ✅ SAFETY: Add defensive checks
+        if (!nearestFielder || !nearestFielder.userData || !nearestFielder.userData.description) {
+            console.error('❌ Invalid fielder object in assignNearestFielderToStationaryBall:', nearestFielder);
+            this.forceCompleteBall();
+            return;
+        }
+        
         const fielderState = this.fieldingSystem.fielderStates.get(nearestFielder.userData.description);
 
         console.log(`🎯 Nearest fielder to stationary ball: ${nearestFielder.userData.description} (${shortestDistance.toFixed(1)}m away, currently ${fielderState})`);
@@ -4274,7 +4377,18 @@ class CricketGame {
     }
 
     updateFieldingSystem(deltaTime) {
-        if (!this.fieldingSystem.ballIsHit) return;
+        if (!this.fieldingSystem.ballIsHit) {
+            // ✅ SAFETY: If ball is bouncing/moving but fielding not active, activate it
+            // This handles cases where ball was bowled but not hit (missed shots)
+            if (this.ballPhysics.isMoving && (this.cricketScore.ballHasBounced || this.ballPhysics.velocity.length() < 3.0)) {
+                console.log('🚨 SAFETY: Ball moving/bouncing but fielding inactive - force activating fielding system');
+                this.fieldingSystem.ballIsHit = true;
+                this.fieldingSystem.shotDirection = 'straight'; // Default direction for missed balls
+                this.fieldingSystem.nextSelectionTime = Date.now(); // Skip debounce for safety activation
+            } else {
+                return;
+            }
+        }
         
         // ✅ NEW: Periodic re-evaluation for hybrid system
         this.assignFielderIfNeeded();
@@ -4416,6 +4530,15 @@ class CricketGame {
         // ✅ FIX: Check if catch is already in progress to prevent multiple animations
         if (this.fieldingSystem.catchingSystem.catchInProgress) {
             console.log(`⚠️ Catch already in progress by ${this.fieldingSystem.catchingSystem.catchingFielder?.userData?.description || 'unknown'} - skipping executeDirectCatch`);
+            return;
+        }
+        
+        // ✅ CRICKET RULES: Cannot catch for wicket if ball has bounced after being hit
+        if (this.cricketScore.ballHasBounced) {
+            console.log(`🚫 ${fielder.userData.description} cannot execute catch - ball has bounced (cricket rules)`);
+            // Switch to ground fielding instead
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'chasing');
+            this.updateFielderChasing(fielder, 0.016); // Start chasing
             return;
         }
         
@@ -4823,18 +4946,27 @@ class CricketGame {
 
     // Calculate optimal intercept point for a fielder
     calculateInterceptPoint(fielder, timeAhead = 2.0) {
-        const fielderSpeed = 8.0; // meters per second
-        const predictedBallPos = this.predictBallPosition(timeAhead);
-        const fielderPos = fielder.position.clone();
+        // ✅ IMPROVED: Use individual fielder speed or default
+        const fielderSpeed = fielder.userData.topSpeed || this.fieldingSystem.DEFAULT_TOP_SPEED;
         
-        // Calculate distance fielder can travel in timeAhead
-        const maxFielderDistance = fielderSpeed * timeAhead;
+        // ✅ IMPROVED: Calculate actual time to ball landing for more accurate prediction
+        const ballTimeToLand = this.calculateTimeToLand();
+        const predictedBallPos = this.predictBallPosition(Math.min(timeAhead, ballTimeToLand));
+        const fielderPos = fielder.position.clone();
         
         // Calculate distance to predicted ball position
         const distanceToBall = fielderPos.distanceTo(predictedBallPos);
         
-        // If fielder can reach the predicted position, return it
-        if (distanceToBall <= maxFielderDistance) {
+        // ✅ IMPROVED: Use dynamic time based on ball's actual flight time
+        const effectiveTimeAhead = Math.min(timeAhead, ballTimeToLand * 0.8); // 80% of ball flight time
+        const maxFielderDistance = fielderSpeed * effectiveTimeAhead;
+        
+        // ✅ IMPROVED: More generous calculation for deep fielders
+        const isDeepFielder = distanceToBall > 25; // Consider fielders 25m+ away as "deep"
+        const generosityFactor = isDeepFielder ? 1.3 : 1.0; // 30% bonus range for deep fielders
+        
+        // If fielder can reach the predicted position (with generosity for deep fielders), return it
+        if (distanceToBall <= maxFielderDistance * generosityFactor) {
             return {
                 position: predictedBallPos,
                 canReach: true,
@@ -4844,12 +4976,12 @@ class CricketGame {
         
         // Otherwise, calculate the closest point fielder can reach
         const direction = predictedBallPos.clone().sub(fielderPos).normalize();
-        const interceptPos = fielderPos.clone().add(direction.multiplyScalar(maxFielderDistance));
+        const interceptPos = fielderPos.clone().add(direction.multiplyScalar(maxFielderDistance * generosityFactor));
         
         return {
             position: interceptPos,
             canReach: false,
-            timeToReach: timeAhead
+            timeToReach: effectiveTimeAhead
         };
     }
 
@@ -4951,6 +5083,14 @@ class CricketGame {
         // ✅ IMPROVED: Check if catch is already in progress
         if (this.fieldingSystem.catchingSystem.catchInProgress) {
             console.log(`⚠️ Catch already in progress by ${this.fieldingSystem.catchingSystem.catchingFielder?.userData?.description || 'unknown'}`);
+            return;
+        }
+        
+        // ✅ CRICKET RULES: Cannot catch for wicket if ball has bounced after being hit
+        if (this.cricketScore.ballHasBounced) {
+            console.log(`🚫 ${fielder.userData.description} cannot attempt catch - ball has bounced (cricket rules)`);
+            // Switch to fielding mode instead
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'chasing');
             return;
         }
         
@@ -5114,7 +5254,7 @@ class CricketGame {
         if (this.ballState.isActive && !this.ballState.isComplete) {
             this.ballState.ballType = 'wicket';
             this.ballState.completionReason = 'caught';
-            this.ballState.runsThisBall = this.runningSystem.runsCompleted; // Any runs completed before catch
+            this.ballState.runsThisBall = 0; // No runs awarded for caught wickets (cricket rules)
             
             // Force complete the ball immediately (wicket has priority)
             setTimeout(() => {
@@ -5498,9 +5638,25 @@ class CricketGame {
             this.swapBatsmen();
         }
 
-        // STOP running system to prevent continuous updates
+        // ✅ IMMEDIATELY STOP running system to prevent continuous updates and animations
         this.runningSystem.isRunning = false;
         this.runningSystem.runState = 'idle';
+        this.runningSystem.turningAtEnd = false;
+        this.runningSystem.waitingForNextRun = false;
+        
+        // ✅ CRITICAL: Force stop any running animations immediately
+        if (this.character && this.character.userData && this.character.userData.animations) {
+            const runningAnims = ['runningcharacter', 'leftturn', 'rightturn'];
+            runningAnims.forEach(animName => {
+                if (this.character.userData.animations.has(animName)) {
+                    const action = this.character.userData.animationMixer.existingAction(animName);
+                    if (action && action.isRunning()) {
+                        console.log(`🛑 Ball completed - force stopping ${animName} animation`);
+                        action.stop();
+                    }
+                }
+            });
+        }
         
         // Add runs from this ball to total score
         this.cricketScore.runs += this.ballState.runsThisBall;
@@ -5648,6 +5804,20 @@ class CricketGame {
                 this.character.userData.currentAction.stop();
                 this.character.userData.currentAction = null;
                 this.character.userData.currentAnimationName = null;
+            }
+            
+            // ✅ ADDITIONAL SAFETY: Stop all running-related animations explicitly
+            if (this.character.userData && this.character.userData.animations) {
+                const runningAnims = ['runningcharacter', 'leftturn', 'rightturn'];
+                runningAnims.forEach(animName => {
+                    if (this.character.userData.animations.has(animName)) {
+                        const action = this.character.userData.animationMixer.existingAction(animName);
+                        if (action && action.isRunning()) {
+                            console.log(`🛑 Force stopping ${animName} animation before reset`);
+                            action.stop();
+                        }
+                    }
+                });
             }
             
             // ✅ FIXED: Always use main character animation system for consistency with hitting animations
@@ -5874,6 +6044,7 @@ class CricketGame {
             // Bounces outside field boundary don't affect scoring (ball already crossed for SIX)
             if (ballDistance < boundaryDistance) {
                 this.cricketScore.ballHasBounced = true;
+                this.cricketScore.firstBounceTime = this.cricketScore.firstBounceTime || Date.now(); // Record first bounce time
                 console.log(`🏐 Ball bounced AFTER being hit at ${ballDistance.toFixed(1)}m from center - will be FOUR if boundary crossed`);
             } else {
                 console.log(`🚀 Ball bounced OUTSIDE field (${ballDistance.toFixed(1)}m) - doesn't affect boundary scoring (SIX potential maintained)`);
@@ -6108,7 +6279,7 @@ class CricketGame {
                             Target: ${this.targetSystem.targetRuns} runs
                         </p>
                     </div>
-                    <button onclick="window.restartTargetChase()" style="
+                    <button onclick="window.quitToMenu()" style="
                         background: rgba(116, 144, 255, 0.9);
                         border: 2px solid rgba(116, 144, 255, 1);
                         color: white;
@@ -6117,24 +6288,9 @@ class CricketGame {
                         font-size: 18px;
                         font-weight: 600;
                         cursor: pointer;
-                        margin-right: 15px;
                         font-family: inherit;
                         transition: all 0.3s ease;
                     " onmouseover="this.style.background='rgba(116, 144, 255, 1)'" onmouseout="this.style.background='rgba(116, 144, 255, 0.9)'">
-                        🔄 Play Again
-                    </button>
-                    <button onclick="window.quitToMenu()" style="
-                        background: rgba(255, 255, 255, 0.1);
-                        border: 2px solid rgba(255, 255, 255, 0.3);
-                        color: white;
-                        padding: 15px 30px;
-                        border-radius: 10px;
-                        font-size: 18px;
-                        font-weight: 600;
-                        cursor: pointer;
-                        font-family: inherit;
-                        transition: all 0.3s ease;
-                    " onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'" onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'">
                         🏠 Main Menu
                     </button>
                 </div>
@@ -6154,24 +6310,13 @@ class CricketGame {
         this.gameOverScreen = notification;
     }
 
-    resetTargetChase() {
-        this.targetSystem.isActive = false;
-        this.targetSystem.gameStatus = 'playing';
-        this.targetSystem.gameOverReason = null;
-        
-        // Remove game over screen if present
-        if (this.gameOverScreen && this.gameOverScreen.parentNode) {
-            this.gameOverScreen.parentNode.removeChild(this.gameOverScreen);
-            this.gameOverScreen = null;
-        }
-        
-        console.log('🔄 Target chase reset');
-    }
+
 
     resetBallTracking() {
         this.cricketScore.ballHasBounced = false;
         this.cricketScore.boundaryAwarded = false;
         this.cricketScore.ballHasBeenHit = false; // ✅ Reset hit flag for new ball
+        this.cricketScore.firstBounceTime = null; // ✅ Reset bounce timer for new ball
     }
     
     resetGame() {
@@ -6407,21 +6552,25 @@ class CricketGame {
         // Update the score display to show player names
         const scoreDisplay = document.querySelector('.score-display');
         if (scoreDisplay && this.multiplayerSystem.isActive) {
-            // Add player info above score
+            // Add player info centered at top
             let playerInfo = document.getElementById('multiplayerInfo');
             if (!playerInfo) {
                 playerInfo = document.createElement('div');
                 playerInfo.id = 'multiplayerInfo';
                 playerInfo.style.cssText = `
-                    background: rgba(0, 0, 0, 0.3);
-                    padding: 10px 20px;
-                    border-radius: 10px 10px 0 0;
-                    border: 2px solid rgba(116, 144, 255, 0.3);
-                    border-bottom: none;
+                    position: fixed;
+                    top: 20px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: rgba(0, 0, 0, 0.7);
+                    padding: 12px 25px;
+                    border-radius: 15px;
+                    border: 2px solid rgba(116, 144, 255, 0.4);
                     font-size: 16px;
-                    margin-bottom: -2px;
+                    z-index: 150;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
                 `;
-                scoreDisplay.parentNode.insertBefore(playerInfo, scoreDisplay);
+                document.body.appendChild(playerInfo);
             }
             
             playerInfo.innerHTML = `
@@ -6689,7 +6838,7 @@ class CricketGame {
                     </div>
                 </div>
                 <div style="margin-top: 30px;">
-                    <button onclick="window.cricketGame.rematchMultiplayer()" style="
+                    <button onclick="window.location.reload()" style="
                         background: rgba(116, 144, 255, 0.9);
                         border: 2px solid rgba(116, 144, 255, 1);
                         color: white;
@@ -6697,23 +6846,9 @@ class CricketGame {
                         border-radius: 10px;
                         font-size: 18px;
                         cursor: pointer;
-                        margin: 0 10px;
                         transition: all 0.3s ease;
                     " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-                        Rematch
-                    </button>
-                    <button onclick="window.location.reload()" style="
-                        background: rgba(255, 107, 107, 0.9);
-                        border: 2px solid rgba(255, 107, 107, 1);
-                        color: white;
-                        padding: 15px 30px;
-                        border-radius: 10px;
-                        font-size: 18px;
-                        cursor: pointer;
-                        margin: 0 10px;
-                        transition: all 0.3s ease;
-                    " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-                        Main Menu
+                        🏠 Main Menu
                     </button>
                 </div>
             </div>
@@ -6722,33 +6857,7 @@ class CricketGame {
         document.body.appendChild(resultScreen);
         this.multiplayerResultScreen = resultScreen;
     }
-    
-    rematchMultiplayer() {
-        // Remove result screen
-        if (this.multiplayerResultScreen) {
-            this.multiplayerResultScreen.remove();
-            this.multiplayerResultScreen = null;
-        }
-        
-        // Reset multiplayer system but keep player names
-        const player1 = this.multiplayerSystem.player1;
-        const player2 = this.multiplayerSystem.player2;
-        
-        // Reset all game state
-        this.resetGame();
-        
-        // Swap who bats first
-        if (window.menuSystem.gameState.multiplayerData.battingFirst === 'player1') {
-            window.menuSystem.gameState.multiplayerData.battingFirst = 'player2';
-        } else {
-            window.menuSystem.gameState.multiplayerData.battingFirst = 'player1';
-        }
-        
-        // Reinitialize multiplayer
-        setTimeout(() => {
-            this.initializeMultiplayer();
-        }, 500);
-    }
+
 
     // ✅ NEW: AI Bowler System Methods
     
@@ -7536,7 +7645,12 @@ class CricketGame {
     }
 
     updateRunningSystem(deltaTime) {
-        if (!this.runningSystem.isRunning) return;
+        // ✅ SAFETY: Don't update running system if ball is completed or not active
+        if (!this.runningSystem.isRunning || 
+            this.ballState.isComplete || 
+            !this.ballState.isActive) {
+            return;
+        }
 
         const currentPos = this.runningSystem.wicketPositions[this.runningSystem.currentEnd];
         const targetPos = this.runningSystem.wicketPositions[this.runningSystem.targetEnd];
@@ -8883,6 +8997,31 @@ class CricketGame {
         // Update running system
         this.updateRunningSystem(deltaTime);
         
+        // ✅ SAFETY: Force stop running animations if ball is not active (prevents stuck running in place)
+        if ((!this.ballState.isActive || this.ballState.isComplete) && 
+            this.character && this.character.userData && this.character.userData.animations) {
+            
+            const runningAnims = ['runningcharacter', 'leftturn', 'rightturn'];
+            let stoppedAny = false;
+            
+            runningAnims.forEach(animName => {
+                if (this.character.userData.animations.has(animName)) {
+                    const action = this.character.userData.animationMixer.existingAction(animName);
+                    if (action && action.isRunning()) {
+                        console.log(`🛑 SAFETY: Ball inactive but ${animName} still running - force stopping`);
+                        action.stop();
+                        stoppedAny = true;
+                    }
+                }
+            });
+            
+            // If we stopped any running animations, ensure batsman goes to idle
+            if (stoppedAny && !this.runningSystem.isRunning) {
+                console.log('🔄 SAFETY: Setting batsman to idle after stopping stuck running animations');
+                this.playCricketPlayerAnimation(this.character, 'standingidle');
+            }
+        }
+        
         // Check for ball-bat collision
         if (this.checkBallBatCollision() && this.batSwing.isSwinging) {
             const hit = this.hitBall();
@@ -8926,6 +9065,12 @@ class CricketGame {
         // ✅ FIX: Only allow catch wickets when ball comes directly from batsman
         if (this.ballPhysics.ballSource !== 'batsman') {
             return; // Skip catch detection for fielder throws and bowler deliveries
+        }
+
+        // ✅ CRICKET RULES: Cannot catch for wicket if ball has bounced after being hit
+        if (this.cricketScore.ballHasBounced) {
+            console.log('🚫 Ball has bounced - no catch wicket possible (cricket rules)');
+            return; // Ball becomes ground ball after bounce - fielders can only field it
         }
 
         const ballPos = this.cricketBall.position;
@@ -9142,16 +9287,20 @@ class CricketGame {
         const catchDistance = distance || fielder.position.distanceTo(ballPosition);
         const ballSpeed = ballVelocity.length();
         
-        // Start with 100% probability
-        let catchProbability = 1.0;
+        // ✅ IMPROVED: More generous calculation for deep fielders attempting boundary prevention
+        const isDeepFielder = catchDistance > 25;
         
-        // Reduce probability based on distance
-        const maxDistance = this.fieldingSystem.catchingSystem.catchRadius;
-        const distanceFactor = Math.max(0, 1 - (catchDistance / maxDistance));
+        // Start with higher base probability for deep fielders
+        let catchProbability = isDeepFielder ? 0.4 : 1.0;
+        
+        // ✅ IMPROVED: Less harsh distance penalty for deep fielders
+        const maxDistance = isDeepFielder ? 50 : this.fieldingSystem.catchingSystem.catchRadius; // Extended range for deep fielders
+        const distanceFactor = Math.max(0.1, 1 - (catchDistance / maxDistance)); // Minimum 10% chance
         catchProbability *= distanceFactor;
         
-        // Reduce probability based on ball speed
-        const speedFactor = Math.max(0.3, 1 - (ballSpeed / 30));
+        // ✅ IMPROVED: Less harsh speed penalty for deep fielders  
+        const speedPenalty = isDeepFielder ? 0.5 : 0.3; // Less speed penalty for deep fielders
+        const speedFactor = Math.max(speedPenalty, 1 - (ballSpeed / 30));
         catchProbability *= speedFactor;
         
         // Determine catch type and apply difficulty modifier
@@ -9159,7 +9308,9 @@ class CricketGame {
         const isDivingCatch = catchDistance > divingRadius;
         
         if (isDivingCatch) {
-            catchProbability *= 0.7; // 30% harder for diving catches
+            // Less penalty for deep diving catches (they're trying to prevent boundaries)
+            const divingPenalty = isDeepFielder ? 0.8 : 0.7;
+            catchProbability *= divingPenalty;
         }
         
         // Ensure probability is between 0 and 1
@@ -11386,15 +11537,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        window.restartTargetChase = () => {
-            if (game) {
-                game.resetTargetChase();
-                // Generate new random target
-                game.startTargetChase();
-            } else {
-                console.log('⚠️ Game not initialized yet');
-            }
-        };
+
 
         // ✅ NEW: Target Chase Demo Functions
         window.demoTargetChase = () => {
