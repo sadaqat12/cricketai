@@ -4232,6 +4232,19 @@ class CricketGame {
         // Set fielder state to catching
         this.fieldingSystem.fielderStates.set(fielder.userData.description, 'catching');
         
+        // ✅ FIX: Stop ball immediately when catch attempt begins to prevent visual trail issue
+        const ballVelocityBackup = this.ballPhysics.velocity.clone(); // Backup for potential dropped catch
+        this.ballPhysics.isMoving = false;
+        this.ballPhysics.velocity.set(0, 0, 0);
+        
+        // Clear ball trail for clean visual during catch attempt
+        this.clearBallTrail();
+        
+        // Store velocity backup on fielder for potential dropped catch restoration
+        fielder.userData.ballVelocityBackup = ballVelocityBackup;
+        
+        console.log(`🛑 Ball stopped during direct catch attempt to prevent visual trail past fielder`);
+        
         // Load and play catch animation
         this.loadCharacterAnimation(fielder, catchAnimation, fielder.userData.description);
         
@@ -4394,20 +4407,17 @@ class CricketGame {
         this.cricketBall.position.copy(fielder.position);
         this.cricketBall.position.y += 1.5; // Hand height
         
-        // Ball is now fielded - but DON'T complete yet if batsman is running (potential run-out)
+        // Ball is now fielded - mark as fielded but DON'T complete until bowler catches it
         if (this.ballState.isActive && !this.ballState.isComplete) {
             this.ballState.ballType = 'fielded';
             this.ballState.completionReason = 'fielded';
             
-            // Only complete immediately if batsman is NOT running (no run-out possible)
+            // ✅ FIX: Don't complete ball here - let it complete only when bowler catches it
+            // This ensures ball completion happens AFTER the ball visually reaches the bowler
             if (!this.runningSystem.isRunning) {
-                console.log('🔚 Batsman not running - completing ball immediately');
-                setTimeout(() => {
-                    this.completeBall();
-                }, 1000);
+                console.log('🔚 Batsman not running - ball will complete when bowler catches it');
             } else {
-                console.log('🏃‍♂️ Batsman still running - delaying ball completion for potential run-out');
-                // Ball completion will happen in bowlerCatchBall() after run-out check
+                console.log('🏃‍♂️ Batsman still running - ball will complete after run-out check in bowlerCatchBall()');
             }
         }
         
@@ -4702,6 +4712,19 @@ class CricketGame {
 
         console.log(`🏃‍♂️ ${fielder.userData.description} attempting catch at ${distance.toFixed(1)}m distance!`);
 
+        // ✅ FIX: Stop ball immediately when catch attempt begins to prevent visual trail issue
+        const ballVelocityBackup = this.ballPhysics.velocity.clone(); // Backup for potential dropped catch
+        this.ballPhysics.isMoving = false;
+        this.ballPhysics.velocity.set(0, 0, 0);
+        
+        // Clear ball trail for clean visual during catch attempt
+        this.clearBallTrail();
+        
+        // Store velocity backup on fielder for potential dropped catch restoration
+        fielder.userData.ballVelocityBackup = ballVelocityBackup;
+        
+        console.log(`🛑 Ball stopped during catch attempt to prevent visual trail past fielder`);
+
         // Determine catch type based on distance
         const regularRadius = this.fieldingSystem.catchingSystem.regularCatchRadius;
         const divingRadius = this.fieldingSystem.catchingSystem.divingCatchRadius;
@@ -4748,20 +4771,17 @@ class CricketGame {
         // Clear ball trail for clean visual
         this.clearBallTrail();
         
-        // Complete the ball immediately since it's been fielded - but check for running batsman
+        // Ball has been fielded via immediate pickup - mark as fielded but DON'T complete until bowler catches it
         if (this.ballState.isActive && !this.ballState.isComplete) {
             this.ballState.ballType = 'fielded';
             this.ballState.completionReason = 'immediate_pickup';
             
-            // Only complete immediately if batsman is NOT running (no run-out possible)
+            // ✅ FIX: Don't complete ball here - let it complete only when bowler catches it
+            // This ensures ball completion happens AFTER the ball visually reaches the bowler
             if (!this.runningSystem.isRunning) {
-                console.log('🔚 Batsman not running - completing ball immediately after pickup');
-                setTimeout(() => {
-                    this.completeBall();
-                }, 500);
+                console.log('🔚 Batsman not running - ball will complete when bowler catches it');
             } else {
-                console.log('🏃‍♂️ Batsman still running - delaying ball completion for potential run-out after pickup');
-                // Ball completion will happen in bowlerCatchBall() after run-out check
+                console.log('🏃‍♂️ Batsman still running - ball will complete after run-out check in bowlerCatchBall()');
             }
         }
         
@@ -4812,7 +4832,7 @@ class CricketGame {
     successfulCatch(fielder, catchType) {
         console.log(`🎉 WICKET! ${fielder.userData.description} takes a spectacular ${catchType}!`);
         
-        // Stop ball movement
+        // Stop ball movement (already stopped during catch attempt, but ensure it stays stopped)
         this.ballPhysics.isMoving = false;
         this.ballPhysics.velocity.set(0, 0, 0);
         
@@ -4823,8 +4843,13 @@ class CricketGame {
         // Set catch result
         this.fieldingSystem.catchingSystem.catchResult = 'success';
         
-        // Clear ball trail for clean visual
+        // Clear ball trail for clean visual (already cleared during attempt, but ensure clean state)
         this.clearBallTrail();
+        
+        // ✅ FIX: Clear velocity backup since catch was successful
+        if (fielder.userData.ballVelocityBackup) {
+            fielder.userData.ballVelocityBackup = null;
+        }
         
         // ✅ NEW: Handle wicket scoring
         this.cricketScore.wickets += 1;
@@ -4858,8 +4883,23 @@ class CricketGame {
         // Set catch result
         this.fieldingSystem.catchingSystem.catchResult = 'dropped';
         
-        // Ball deflects when dropped (realistic behavior)
-        this.ballPhysics.velocity.multiplyScalar(0.6); // Reduce speed by 40%
+        // ✅ FIX: Restore ball movement using backed up velocity for dropped catches
+        if (fielder.userData.ballVelocityBackup) {
+            console.log(`🔄 Restoring ball movement from backup velocity`);
+            this.ballPhysics.velocity.copy(fielder.userData.ballVelocityBackup);
+            this.ballPhysics.isMoving = true;
+            
+            // Clear the backup
+            fielder.userData.ballVelocityBackup = null;
+        } else {
+            // Fallback if no backup available
+            console.log(`⚠️ No velocity backup found, using default deflection`);
+            this.ballPhysics.velocity.set(2, 1, 2); // Default gentle movement
+            this.ballPhysics.isMoving = true;
+        }
+        
+        // Ball deflects when dropped (realistic behavior) - reduce speed by 40%
+        this.ballPhysics.velocity.multiplyScalar(0.6);
         
         // Add slight deflection from the drop
         const deflection = new THREE.Vector3(
@@ -10421,6 +10461,37 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('🔄 Triggering stationary ball collection...');
             
             game.assignNearestFielderToStationaryBall();
+        };
+
+        // ✅ NEW: Test catching visual fix
+        window.testCatchVisualFix = () => {
+            console.log('🧪 Testing catch visual fix (ball should stop immediately during catch attempt)...');
+            
+            if (!game.cricketBall || !game.fielders || game.fielders.length === 0) {
+                console.log('❌ Missing ball or fielders');
+                return;
+            }
+            
+            // Set up a catching scenario
+            const testFielder = game.fielders[2]; // Use Cover fielder
+            game.cricketBall.position.set(18, 2.5, -8); // Ball near Cover
+            game.ballPhysics.velocity.set(-5, -2, 3); // Ball moving toward Cover
+            game.ballPhysics.isMoving = true;
+            
+            // Mark ball as hit to enable fielding
+            game.fieldingSystem.ballIsHit = true;
+            
+            console.log('🎾 Ball set up near Cover fielder with movement');
+            console.log('📏 Watch for ball to stop immediately when catch attempt begins');
+            console.log('🎭 Ball trail should disappear cleanly without going past fielder');
+            
+            // Force trigger catch after short delay
+            setTimeout(() => {
+                if (game.ballPhysics.isMoving) {
+                    console.log('🎯 Force triggering catch attempt...');
+                    game.attemptCatch(testFielder, 2.5);
+                }
+            }, 1000);
         };
 
         // Expose catching system for testing
