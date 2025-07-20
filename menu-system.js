@@ -109,6 +109,11 @@ function startFreePlay() {
     // ✅ NEW: Let the game's loading system handle the loading screen
     // Don't hide loading screen here - the game will handle it
     
+    // Reset game if switching modes
+    if (window.cricketGame && window.cricketGame.isInitialized) {
+        window.cricketGame.resetForNewGame();
+    }
+    
     // Initialize the game without target chase
     if (window.startCricketGame) {
         window.startCricketGame();
@@ -127,6 +132,11 @@ function startTargetChaseMode() {
     
     // ✅ NEW: Let the game's loading system handle the loading screen
     // Don't hide loading screen here - the game will handle it
+    
+    // Reset game if switching modes
+    if (window.cricketGame && window.cricketGame.isInitialized) {
+        window.cricketGame.resetForNewGame();
+    }
     
     // Initialize the game
     if (window.startCricketGame) {
@@ -350,6 +360,11 @@ function startMultiplayerGame() {
     hideAllMenus();
     document.getElementById('gameContainer').style.display = 'block';
     
+    // Reset game if switching modes
+    if (window.cricketGame && window.cricketGame.isInitialized) {
+        window.cricketGame.resetForNewGame();
+    }
+    
     // Initialize the game
     if (window.startCricketGame) {
         window.startCricketGame();
@@ -420,36 +435,8 @@ function showSettingsInGame() {
 function quitToMenu() {
     // Confirm before quitting
     if (confirm('Are you sure you want to quit to the main menu? Your progress will be lost.')) {
-        gameState.isPlaying = false;
-        gameState.isPaused = false;
-        gameState.gameMode = null;
-        
-        // Reset multiplayer data if exists
-        if (gameState.multiplayerData) {
-            gameState.multiplayerData = null;
-        }
-        
-        // Stop game
-        if (window.stopCricketGame) {
-            window.stopCricketGame();
-        }
-        
-        // Hide game and show main menu
-        document.getElementById('gameContainer').style.display = 'none';
-        document.getElementById('pauseMenu').style.display = 'none';
-        
-        // Hide loading screen if it's stuck
-        hideLoadingScreen();
-        
-        // Remove any lingering UI elements
-        const gameScreens = document.querySelectorAll('[id*="multiplayerSetup"], [id*="tossScreen"]');
-        gameScreens.forEach(screen => {
-            if (screen && screen.classList.contains('active')) {
-                screen.classList.remove('active');
-            }
-        });
-        
-        showMainMenu();
+        // Simply refresh the page to ensure clean state
+        window.location.reload();
     }
 }
 

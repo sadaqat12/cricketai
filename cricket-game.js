@@ -4936,6 +4936,12 @@ class CricketGame {
         
         this.showTargetNotification();
         this.updateCricketScore();
+        
+        // Initialize AI Bowler for target chase mode
+        setTimeout(() => {
+            console.log('🤖 Initializing AI Bowler for target chase first ball...');
+            this.initializeAIBowler();
+        }, 2000); // Give time for UI to settle
     }
 
     checkTargetChaseConditions() {
@@ -5191,6 +5197,106 @@ class CricketGame {
         this.updateCricketScore();
         
         console.log('🔄 Game reset complete');
+    }
+
+    resetForNewGame() {
+        console.log('🔄 Resetting game for new mode...');
+        
+        // Call the existing reset game method
+        this.resetGame();
+        
+        // Reset game mode flags
+        this.gameMode = null;
+        
+        // Reset batting team if exists
+        if (this.battingTeam) {
+            // Reset all player stats
+            this.battingTeam.players.forEach(player => {
+                player.runs = 0;
+                player.ballsFaced = 0;
+                player.dismissal = null;
+                player.isOut = false;
+            });
+            
+            // Reset team position
+            this.battingTeam.currentBatsman = 0;
+            this.battingTeam.currentPartner = 1;
+            
+            // Reset extras
+            this.battingTeam.extras = {
+                byes: 0,
+                legByes: 0,
+                wides: 0,
+                noBalls: 0,
+                penalties: 0
+            };
+        }
+        
+        // Reset running system
+        this.runningSystem.isRunning = false;
+        this.runningSystem.runState = 'idle';
+        this.runningSystem.currentEnd = 'batsman';
+        this.runningSystem.targetEnd = 'bowler';
+        this.runningSystem.runProgress = 0;
+        this.runningSystem.runsCompleted = 0;
+        this.runningSystem.turningAtEnd = false;
+        this.runningSystem.waitingForNextRun = false;
+        
+        // Reset fielding system
+        this.fieldingSystem.ballIsHit = false;
+        this.fieldingSystem.nearestFielder = null;
+        this.fieldingSystem.chasingFielder = null;
+        
+        // Reset ball physics
+        this.ballPhysics.velocity.set(0, 0, 0);
+        this.ballPhysics.isMoving = false;
+        
+        // Position ball at bowler's end
+        if (this.cricketBall) {
+            this.cricketBall.position.set(0, 1, -11);
+        }
+        
+        // Reset character to batting position
+        if (this.character) {
+            this.character.position.set(0, 0, 9);
+            this.character.rotation.y = Math.PI;
+        }
+        
+        // Clear any UI notifications or screens
+        const notifications = document.querySelectorAll('.ball-result, .game-notification');
+        notifications.forEach(n => n.remove());
+        
+        // Remove any game over screens
+        if (this.gameOverScreen) {
+            this.gameOverScreen.remove();
+            this.gameOverScreen = null;
+        }
+        
+        // Remove innings break screen
+        if (this.inningsBreakScreen) {
+            this.inningsBreakScreen.remove();
+            this.inningsBreakScreen = null;
+        }
+        
+        // Remove multiplayer result screen
+        if (this.multiplayerResultScreen) {
+            this.multiplayerResultScreen.remove();
+            this.multiplayerResultScreen = null;
+        }
+        
+        // Reset AI bowler state
+        if (this.aiBowler) {
+            this.aiBowler.currentDeliveryType = null;
+            this.aiBowler.isProcessing = false;
+        }
+        
+        // Hide all UI elements that should not be visible initially
+        const bowlingControls = document.getElementById('bowlingControls');
+        if (bowlingControls) {
+            bowlingControls.style.display = 'none';
+        }
+        
+        console.log('✅ Game reset for new mode complete');
     }
 
     // Multiplayer System Methods
