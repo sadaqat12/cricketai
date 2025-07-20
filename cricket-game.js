@@ -56,7 +56,8 @@ class CricketGame {
             gravity: -9.81,
             bounceCoefficient: 0.5, // Better bounce for visible cricket ball movement
             friction: 0.92, // Slight friction adjustment
-            isMoving: false
+            isMoving: false,
+            ballSource: 'none' // 'batsman', 'fielder', 'bowler', 'none' - tracks who last set ball in motion
         };
         
         // Ball trail system
@@ -91,34 +92,34 @@ class CricketGame {
         // - Positive Z = Behind batsman/behind wicket shots
         this.shotTypes = {
             // Straight shots
-            defensive: { power: 0.3, direction: [0, 0, -1], height: 0.1, description: 'Defensive Block' },
-            straightDrive: { power: 1.7, direction: [0, 0, -1], height: 0.5, description: 'Straight Drive' },
-            loftedStraight: { power: 2.5, direction: [0, 0, -1], height: 0.6, description: 'Lofted Straight' },
+            defensive: { power: 0.3, direction: [0, 0, -1], height: 0.1, difficulty: 'easy', description: 'Defensive Block' },
+            straightDrive: { power: 1.7, direction: [0, 0, -1], height: 0.5, difficulty: 'medium', description: 'Straight Drive' },
+            loftedStraight: { power: 2.1, direction: [0, 0, -1], height: 0.55, difficulty: 'hard', description: 'Lofted Straight' },
             
             // Off-side shots (right side for right-handed batsman) - Positive X
-            cutShot: { power: 1.8, direction: [1, 0, -0.3], height: 0.15, description: 'Cut Shot' },
-            squareCut: { power: 2.0, direction: [1, 0, 0.2], height: 0.2, description: 'Square Cut' },
-            upperCut: { power: 2.2, direction: [0.8, 0, 0.4], height: 0.5, description: 'Upper Cut' },
-            coverDrive: { power: 1.8, direction: [0.8, 0, -0.6], height: 0.25, description: 'Cover Drive' },
+            cutShot: { power: 1.8, direction: [1, 0, -0.3], height: 0.15, difficulty: 'medium', description: 'Cut Shot' },
+            squareCut: { power: 2.0, direction: [1, 0, 0.2], height: 0.2, difficulty: 'medium', description: 'Square Cut' },
+            upperCut: { power: 1.9, direction: [0.8, 0, 0.4], height: 0.45, difficulty: 'hard', description: 'Upper Cut' },
+            coverDrive: { power: 1.8, direction: [0.8, 0, -0.6], height: 0.25, difficulty: 'medium', description: 'Cover Drive' },
             
             // Leg-side shots (left side for right-handed batsman) - Negative X
-            pullShot: { power: 2.2, direction: [-1, 0, -0.3], height: 0.3, description: 'Pull Shot' },
-            hookShot: { power: 2.4, direction: [-0.9, 0, 0.3], height: 0.4, description: 'Hook Shot' },
-            legGlance: { power: 1.5, direction: [-0.6, 0, 0.8], height: 0.1, description: 'Leg Glance' },
-            onDrive: { power: 1.6, direction: [-0.7, 0, -0.7], height: 0.2, description: 'On Drive' },
+            pullShot: { power: 1.9, direction: [-1, 0, -0.3], height: 0.3, difficulty: 'hard', description: 'Pull Shot' },
+            hookShot: { power: 2.0, direction: [-0.9, 0, 0.3], height: 0.4, difficulty: 'very_hard', description: 'Hook Shot' },
+            legGlance: { power: 1.5, direction: [-0.6, 0, 0.8], height: 0.1, difficulty: 'easy', description: 'Leg Glance' },
+            onDrive: { power: 1.6, direction: [-0.7, 0, -0.7], height: 0.2, difficulty: 'medium', description: 'On Drive' },
             
             // Behind wicket shots - Positive Z
-            lateCut: { power: 1.4, direction: [0.6, 0, 0.8], height: 0.1, description: 'Late Cut' },
-            reverseSwep: { power: 1.8, direction: [0.8, 0, 0.6], height: 0.3, description: 'Reverse Sweep' },
+            lateCut: { power: 1.4, direction: [0.6, 0, 0.8], height: 0.1, difficulty: 'medium', description: 'Late Cut' },
+            reverseSwep: { power: 1.8, direction: [0.8, 0, 0.6], height: 0.3, difficulty: 'hard', description: 'Reverse Sweep' },
             
-            // Aggressive shots
-            slog: { power: 2.5, direction: [-0.7, 0, -0.7], height: 0.8, description: 'Slog' },
-            helicopter: { power: 2.5, direction: [0, 0, -1], height: 0.9, description: 'Helicopter Shot' },
+            // Aggressive shots - REBALANCED for cricket realism with high difficulty
+            slog: { power: 2.0, direction: [-0.7, 0, -0.7], height: 0.6, difficulty: 'very_hard', description: 'Slog' },
+            helicopter: { power: 2.1, direction: [0, 0, -1], height: 0.7, difficulty: 'very_hard', description: 'Helicopter Shot' },
             
             // Power variations
-            lightTap: { power: 0.4, direction: [0, 0, -1], height: 0.05, description: 'Light Tap' },
-            mediumHit: { power: 1.5, direction: [0, 0, -1], height: 0.2, description: 'Medium Hit' },
-            powerShot: { power: 3.0, direction: [0, 0, -1], height: 0.6, description: 'Power Shot' }
+            lightTap: { power: 0.4, direction: [0, 0, -1], height: 0.05, difficulty: 'easy', description: 'Light Tap' },
+            mediumHit: { power: 1.5, direction: [0, 0, -1], height: 0.2, difficulty: 'medium', description: 'Medium Hit' },
+            powerShot: { power: 2.3, direction: [0, 0, -1], height: 0.5, difficulty: 'very_hard', description: 'Power Shot' }
         };
         
         // Cricket team characters
@@ -145,9 +146,9 @@ class CricketGame {
             fielderOriginalPositions: new Map(), // Store original fielding positions
             
             // Hybrid fielding constants
-            DEBOUNCE_MS: 120,
+            DEBOUNCE_MS: 250,
             RE_EVAL_INTERVAL_MS: 250,
-            HANDOVER_MARGIN_SEC: 0.7,
+            HANDOVER_MARGIN_SEC: 1.5, // ✅ FIX: Increased to reduce unnecessary handovers
             HANDOVER_COOLDOWN_MS: 500,
             MAX_CATCH_INTERCEPT_DIST: 25,
             DEFAULT_TOP_SPEED: 8.0,
@@ -1994,6 +1995,9 @@ class CricketGame {
         );
         
         this.ballPhysics.isMoving = true;
+        
+        // ✅ FIX: Track that ball is coming from bowler
+        this.ballPhysics.ballSource = 'bowler';
     }
 
     createBatCollisionSphere() {
@@ -2860,6 +2864,9 @@ class CricketGame {
         // ✅ CRICKET RULES FIX: Mark that ball has been hit (for boundary scoring logic)
         this.cricketScore.ballHasBeenHit = true;
         
+        // ✅ FIX: Track that ball is now coming from batsman (for wicket eligibility)
+        this.ballPhysics.ballSource = 'batsman';
+        
         // ✅ ENHANCED: Get comprehensive timing analysis (moved before trail color)
         const timingResult = this.calculateTimingMultiplier();
         const { power: powerMultiplier, timing, directionalAccuracy, distance } = timingResult;
@@ -3005,34 +3012,58 @@ class CricketGame {
         const velocity = this.ballPhysics.velocity;
         const speed = velocity.length();
         
-        // Calculate variation based on timing quality and ball speed
+        // ✅ CRICKET REALISM: Get shot difficulty for additional variation
+        const shotType = this.batSwing.shotType;
+        const shot = this.shotTypes[shotType];
+        const shotDifficulty = shot ? shot.difficulty : 'medium';
+        
+        // Calculate variation based on timing quality and shot difficulty
         let baseVariation = 0.02; // Minimal base variation for perfect shots
+        let difficultyMultiplier = 1.0;
+        
+        // ✅ ENHANCED: Shot difficulty affects variation amount
+        switch (shotDifficulty) {
+            case 'easy':
+                difficultyMultiplier = 0.8; // 20% less variation
+                break;
+            case 'medium':
+                difficultyMultiplier = 1.0; // Normal variation
+                break;
+            case 'hard':
+                difficultyMultiplier = 1.3; // 30% more variation
+                break;
+            case 'very_hard':
+                difficultyMultiplier = 1.6; // 60% more variation - aggressive shots are risky!
+                break;
+        }
         
         switch (timing) {
             case 'perfect':
-                baseVariation = 0.02; // 2% - very precise
+                baseVariation = 0.02 * difficultyMultiplier; // Very precise, but harder shots still vary
                 break;
             case 'good':
-                baseVariation = 0.08; // 8% - slight variation
+                baseVariation = 0.08 * difficultyMultiplier; // Slight variation, amplified by difficulty
                 break;
             case 'okay':
-                baseVariation = 0.18; // 18% - noticeable variation
+                baseVariation = 0.18 * difficultyMultiplier; // Noticeable variation
                 break;
             case 'poor':
-                baseVariation = 0.35; // 35% - significant variation
+                baseVariation = 0.35 * difficultyMultiplier; // Significant variation, very bad for aggressive shots
                 break;
         }
         
         // ✅ CRICKET PHYSICS: Different variation patterns based on shot quality
         if (timing === 'poor') {
             // Poor timing: more unpredictable, can have sudden direction changes
-            const unpredictability = 1.5; // Higher chaos factor
+            const unpredictability = shotDifficulty === 'very_hard' ? 2.0 : 1.5; // Extra chaos for aggressive shots
             velocity.x += (Math.random() - 0.5) * baseVariation * speed * unpredictability;
             velocity.y += (Math.random() - 0.5) * baseVariation * speed * unpredictability * 0.8;
             velocity.z += (Math.random() - 0.5) * baseVariation * speed * unpredictability;
             
             // ✅ Poor timing often causes the ball to lose speed faster (mishits)
-            const speedLoss = 0.85 + Math.random() * 0.15; // 85%-100% speed retention
+            const speedLoss = shotDifficulty === 'very_hard' ? 
+                             (0.75 + Math.random() * 0.20) : // 75%-95% for aggressive shots
+                             (0.85 + Math.random() * 0.15);  // 85%-100% for normal shots
             velocity.multiplyScalar(speedLoss);
             
         } else if (timing === 'okay') {
@@ -3042,7 +3073,7 @@ class CricketGame {
             velocity.z += (Math.random() - 0.5) * baseVariation * speed * 0.8;
             
         } else {
-            // Good/Perfect timing: minimal, controlled variation
+            // Good/Perfect timing: minimal, controlled variation (but still affected by shot difficulty)
             velocity.x += (Math.random() - 0.5) * baseVariation * speed * 0.7;
             velocity.y += (Math.random() - 0.5) * baseVariation * speed * 0.5;
             velocity.z += (Math.random() - 0.5) * baseVariation * speed * 0.6;
@@ -3053,7 +3084,7 @@ class CricketGame {
         velocity.x += (Math.random() - 0.5) * spinEffect * speed;
         velocity.z += (Math.random() - 0.5) * spinEffect * speed;
         
-        console.log(`🌪️ Applied ${timing} shot variation: ${(baseVariation * 100).toFixed(1)}% base variation`);
+        console.log(`🌪️ Applied ${timing} shot variation for ${shotDifficulty} shot: ${(baseVariation * 100).toFixed(1)}% base variation`);
     }
 
     calculateTimingMultiplier() {
@@ -3064,52 +3095,93 @@ class CricketGame {
         const batPos = this.character.position;
         const distance = ballPos.distanceTo(batPos);
         
+        // ✅ NEW: Get shot difficulty modifier for realistic cricket balance
+        const shotType = this.batSwing.shotType;
+        const shot = this.shotTypes[shotType];
+        const shotDifficulty = shot ? shot.difficulty : 'medium';
+        
         // ✅ NEW: Also consider ball velocity and swing timing for more realistic timing
         const ballVelocity = this.ballPhysics.velocity.length();
         const swingDuration = Date.now() - this.batSwing.swingStartTime;
         const optimalSwingTime = 200; // milliseconds - optimal swing timing window
-        const swingTimingFactor = Math.max(0.3, 1.0 - Math.abs(swingDuration - optimalSwingTime) / 400); // More gradual penalty
+        
+        // ✅ CRICKET REALISM: Shot difficulty affects timing strictness (rebalanced for playability)
+        let timingPenalty = 400; // Base timing penalty divisor
+        let baseTimingFactor = 0.3; // Minimum timing factor
+        
+        switch (shotDifficulty) {
+            case 'easy':
+                timingPenalty = 550; // More forgiving
+                baseTimingFactor = 0.4;
+                break;
+            case 'medium':
+                timingPenalty = 450; // Normal
+                baseTimingFactor = 0.35;
+                break;
+            case 'hard':
+                timingPenalty = 350; // Moderately stricter
+                baseTimingFactor = 0.3;
+                break;
+            case 'very_hard':
+                timingPenalty = 275; // Challenging but playable
+                baseTimingFactor = 0.25;
+                break;
+        }
+        
+        const swingTimingFactor = Math.max(baseTimingFactor, 1.0 - Math.abs(swingDuration - optimalSwingTime) / timingPenalty);
         
         let powerMultiplier, timingCategory, directionalAccuracy;
         
-        // ✅ DEBUG: Show timing calculation details
-        console.log(`🔍 Timing Debug: distance=${distance.toFixed(2)}m, swingDuration=${swingDuration}ms, swingFactor=${swingTimingFactor.toFixed(3)}`);
+        // ✅ DEBUG: Show timing calculation details with shot difficulty
+        console.log(`🔍 Timing Debug: ${shot?.description || 'shot'} (${shotDifficulty}): distance=${distance.toFixed(2)}m, swingDuration=${swingDuration}ms, swingFactor=${swingTimingFactor.toFixed(3)}`);
         
-        // ✅ ENHANCED: Balanced cricket timing zones with smoother transitions
-        // Primary factor is swing timing, with distance as secondary factor
-        if (distance >= 0.8 && distance <= 2.5 && swingTimingFactor > 0.80) {
-            // Perfect timing: Excellent swing timing + good ball position
+        // ✅ ENHANCED: Shot difficulty affects timing thresholds (more forgiving but still challenging)
+        const perfectThreshold = shotDifficulty === 'very_hard' ? 0.85 : 
+                                shotDifficulty === 'hard' ? 0.80 : 
+                                shotDifficulty === 'medium' ? 0.80 : 0.75;
+        
+        const goodThreshold = shotDifficulty === 'very_hard' ? 0.65 : 
+                             shotDifficulty === 'hard' ? 0.60 : 
+                             shotDifficulty === 'medium' ? 0.60 : 0.55;
+        
+        const okayThreshold = shotDifficulty === 'very_hard' ? 0.45 : 
+                             shotDifficulty === 'hard' ? 0.40 : 
+                             shotDifficulty === 'medium' ? 0.40 : 0.35;
+        
+        // ✅ ENHANCED: Balanced cricket timing zones with difficulty-based thresholds
+        if (distance >= 0.8 && distance <= 2.5 && swingTimingFactor > perfectThreshold) {
+            // Perfect timing: Much harder for aggressive shots
             timingCategory = 'perfect';
-            powerMultiplier = 1.4; // Increased perfect timing bonus
-            directionalAccuracy = 1.0; // Shot goes exactly where intended
-            console.log('🎯 PERFECT timing! Pure middle of the bat');
-        } else if (distance >= 0.6 && distance <= 3.0 && swingTimingFactor > 0.60) {
-            // Good timing: Good swing timing + decent ball position
+            powerMultiplier = shotDifficulty === 'very_hard' ? 1.3 : 1.4; // Slightly reduced reward for very hard shots
+            directionalAccuracy = 1.0;
+            console.log(`🎯 PERFECT ${shotDifficulty} shot! Exceptional timing on ${shot?.description || 'shot'}`);
+        } else if (distance >= 0.6 && distance <= 3.0 && swingTimingFactor > goodThreshold) {
+            // Good timing: Slightly reduced for aggressive shots but still good
             timingCategory = 'good';
-            powerMultiplier = 1.1;
-            directionalAccuracy = 0.85; // 15% directional variation
-            console.log('✅ Good timing - solid contact');
-        } else if (distance >= 0.4 && distance <= 3.5 && swingTimingFactor > 0.40) {
-            // Okay timing: Moderate swing timing + acceptable ball position
+            powerMultiplier = shotDifficulty === 'very_hard' ? 1.05 : 1.1;
+            directionalAccuracy = shotDifficulty === 'very_hard' ? 0.8 : 0.85;
+            console.log(`✅ Good ${shotDifficulty} shot - solid contact on ${shot?.description || 'shot'}`);
+        } else if (distance >= 0.4 && distance <= 3.5 && swingTimingFactor > okayThreshold) {
+            // Okay timing: Moderately reduced for aggressive shots
             timingCategory = 'okay';
-            powerMultiplier = 0.9;
-            directionalAccuracy = 0.65; // 35% directional variation
-            console.log('⚠️ Okay timing - not quite middled');
+            powerMultiplier = shotDifficulty === 'very_hard' ? 0.85 : 0.9;
+            directionalAccuracy = shotDifficulty === 'very_hard' ? 0.65 : 0.7;
+            console.log(`⚠️ Okay ${shotDifficulty} shot - not quite middled ${shot?.description || 'shot'}`);
         } else {
-            // Poor timing: Bad swing timing OR bad ball position OR both
+            // Poor timing: Still penalized but not completely useless
             timingCategory = 'poor';
-            powerMultiplier = 0.6; // Significant power loss
-            directionalAccuracy = 0.4; // 60% directional variation (edges, mishits)
+            powerMultiplier = shotDifficulty === 'very_hard' ? 0.55 : 0.65;
+            directionalAccuracy = shotDifficulty === 'very_hard' ? 0.35 : 0.45;
             
-            // ✅ CRICKET REALISM: Determine type of mishit
-            if (swingTimingFactor < 0.40) {
-                console.log('❌ POOR timing - swing timing way off!');
+            // ✅ CRICKET REALISM: Determine type of mishit with shot context
+            if (swingTimingFactor < okayThreshold) {
+                console.log(`❌ POOR ${shotDifficulty} shot - ${shot?.description || 'shot'} timing way off!`);
             } else if (distance < 0.4) {
-                console.log('❌ POOR timing - too close! Cramped shot');
+                console.log(`❌ POOR timing - cramped ${shot?.description || 'shot'}!`);
             } else if (distance > 3.5) {
-                console.log('❌ POOR timing - reaching! Outside edge likely');
+                console.log(`❌ POOR timing - reaching for ${shot?.description || 'shot'}! Edge likely`);
             } else {
-                console.log('❌ POOR timing - mistimed shot');
+                console.log(`❌ POOR timing - mistimed ${shot?.description || 'shot'}`);
             }
         }
         
@@ -3119,14 +3191,16 @@ class CricketGame {
             distance: distance,
             swingDuration: swingDuration,
             swingTimingFactor: swingTimingFactor,
-            ballVelocity: ballVelocity
+            ballVelocity: ballVelocity,
+            shotDifficulty: shotDifficulty
         };
         
         return {
             power: powerMultiplier,
             timing: timingCategory,
             directionalAccuracy: directionalAccuracy,
-            distance: distance
+            distance: distance,
+            shotDifficulty: shotDifficulty
         };
     }
 
@@ -3140,6 +3214,15 @@ class CricketGame {
         
         this.fieldingSystem.ballIsHit = true;
         this.fieldingSystem.ballLastPosition.copy(this.cricketBall.position);
+        
+        // ✅ FIX: Lock in shot direction at the moment of impact
+        const initialLandingPos = this.predictBallLanding();
+        if (initialLandingPos) {
+            this.fieldingSystem.shotDirection = this.determineShotDirection(this.ballPhysics.velocity.clone(), initialLandingPos);
+            console.log(`🎯 Shot direction locked in: ${this.fieldingSystem.shotDirection}`);
+        } else {
+            this.fieldingSystem.shotDirection = 'straight'; // Default fallback
+        }
         
         // 🚫 SAFETY: Ensure all fielders are idle before selecting new response
         this.fielders.forEach(fielder => {
@@ -3189,6 +3272,24 @@ class CricketGame {
             return;
         }
         
+        // ✅ FIX: Check if ball has moved significantly past assigned fielder - reassign
+        if (this.fieldingSystem.currentTask && currentBallSpeed < 5.0) { // Only for slower rolling balls
+            const currentFielder = this.fieldingSystem.currentTask.fielder;
+            const ballPos = this.cricketBall.position.clone();
+            const fielderDistanceToBall = currentFielder.position.distanceTo(ballPos);
+            
+            // If assigned fielder is far from ball, check if another fielder is much closer
+            if (fielderDistanceToBall > 8.0) {
+                const nearbyFielder = this.findNearestIdleFielder(ballPos, fielderDistanceToBall * 0.7); // 30% closer required
+                if (nearbyFielder) {
+                    console.log(`🔄 Ball rolled past ${currentFielder.userData.description} (${fielderDistanceToBall.toFixed(1)}m away) - reassigning to ${nearbyFielder.userData.description} (${nearbyFielder.distance.toFixed(1)}m away)`);
+                    this.clearCurrentTask();
+                    this.assignFieldingTask(nearbyFielder.fielder, 'ground', now);
+                    return;
+                }
+            }
+        }
+        
         // ✅ FIX: Auto-reset if fielding has been going on too long (edge case protection)
         if (this.fieldingSystem.currentTask) {
             const taskDuration = now - this.fieldingSystem.currentTask.startTime;
@@ -3236,6 +3337,14 @@ class CricketGame {
             if (!this.fieldingSystem.currentTask) {
                 this.assignFieldingTask(groundChaser.fielder, 'ground', now);
             }
+        } else if (!this.fieldingSystem.currentTask) {
+            // ✅ FIX: If no fielder is assigned at all, assign nearest fielder as fallback
+            console.log('⚠️ No fielder assigned by selection logic - assigning nearest fielder as fallback');
+            const nearestResult = this.findNearestIdleFielder(ballPos);
+            if (nearestResult) {
+                console.log(`🚨 Fallback assignment: ${nearestResult.fielder.userData.description} (${nearestResult.distance.toFixed(1)}m away)`);
+                this.assignFieldingTask(nearestResult.fielder, 'ground', now);
+            }
         }
         
         // Update evaluation time regardless
@@ -3262,8 +3371,8 @@ class CricketGame {
         
         const candidates = [];
         
-        // ✅ FIX: Determine shot direction for aerial catch filtering too
-        const shotDirection = this.determineShotDirection(ballVelocity, landingPos);
+        // ✅ FIX: Use locked-in shot direction for aerial catch filtering too  
+        const shotDirection = this.fieldingSystem.shotDirection || 'straight';
         
         // Evaluate each idle fielder for aerial catch capability
         this.fielders.forEach(fielder => {
@@ -3330,7 +3439,7 @@ class CricketGame {
         return winner;
     }
 
-    // ✅ NEW: PASS B - Select ground chaser
+    // ✅ NEW: PASS B - Select ground chaser (Pure distance-based selection)
     selectGroundChaser(ballPos, ballVelocity, timeToLand) {
         console.log('🏃 Pass B: Looking for ground chaser...');
         
@@ -3340,53 +3449,70 @@ class CricketGame {
             return null;
         }
         
-        // ✅ FIX: Determine shot direction to filter appropriate fielders
-        const shotDirection = this.determineShotDirection(ballVelocity, landingPos);
-        console.log(`📍 Shot direction: ${shotDirection}`);
+        console.log(`📍 Predicted landing position: (${landingPos.x.toFixed(1)}, ${landingPos.z.toFixed(1)})`);
         
         const candidates = [];
         
-        // Evaluate each idle fielder for ground fielding
+        // Evaluate each idle fielder for ground fielding - PURE DISTANCE BASED
         this.fielders.forEach(fielder => {
-            if (this.fieldingSystem.fielderStates.get(fielder.userData.description) !== 'idle') {
+            const fielderName = fielder.userData?.description || 'Unknown';
+            const fielderState = this.fieldingSystem.fielderStates.get(fielderName);
+            
+            if (fielderState !== 'idle') {
                 return;
             }
             
-            // ✅ FIX: Apply role and directional filters
-            if (!this.isFielderSuitableForGroundChase(fielder, shotDirection, landingPos)) {
-                return;
+            // Only basic exclusions for special roles that shouldn't leave their core responsibilities
+            const role = fielder.userData.role;
+            
+            // Keep keeper close to stumps (basic cricket logic)
+            if (role === 'keeper') {
+                const distanceFromStumps = Math.sqrt(landingPos.x * landingPos.x + (landingPos.z - 9) * (landingPos.z - 9));
+                if (distanceFromStumps > 15) { // Increased threshold - only exclude for very distant shots
+                    console.log(`🚫 ${fielder.userData.description} excluded: keeper for very distant shot (${distanceFromStumps.toFixed(1)}m)`);
+                    return;
+                }
             }
             
+            // Calculate pure distance to landing position
             const distToLanding = fielder.position.distanceTo(landingPos);
-            // ✅ FIX: Add defensive check for topSpeed to prevent NaN ETA
             const topSpeed = fielder.userData.topSpeed || this.fieldingSystem.DEFAULT_TOP_SPEED;
             const eta = distToLanding / topSpeed;
             
-            // ✅ FIX: Add directional penalty for fielders in wrong sector
-            const directionalPenalty = this.calculateDirectionalPenalty(fielder, shotDirection, landingPos);
-            const adjustedETA = eta + directionalPenalty;
+            // ✅ FIX: Validate ETA before using it
+            if (!isFinite(eta) || eta < 0) {
+                console.log(`❌ Invalid ETA for ${fielderName}: ${eta} (dist: ${distToLanding}, speed: ${topSpeed})`);
+                return; // Skip this fielder
+            }
             
             candidates.push({
                 fielder,
                 distToLanding,
-                eta: adjustedETA,
+                eta,
                 rawETA: eta,
-                directionalPenalty,
-                score: adjustedETA
+                directionalPenalty: 0, // No directional penalties in pure distance mode
+                score: eta
             });
         });
         
         if (candidates.length === 0) {
-            console.log('❌ No suitable fielders for ground chase after filtering');
+            console.log('❌ No idle fielders available for ground chase');
             return null;
         }
         
-        // Sort by adjusted ETA (fastest to reach wins)
+        // Sort by pure ETA (closest/fastest to reach wins)
         candidates.sort((a, b) => a.eta - b.eta);
         
         const winner = candidates[0];
         console.log(`✅ Pass B winner: ${winner.fielder.userData.description}`);
-        console.log(`   Raw ETA: ${winner.rawETA.toFixed(1)}s, Directional penalty: ${winner.directionalPenalty.toFixed(1)}s, Final: ${winner.eta.toFixed(1)}s`);
+        console.log(`   Distance to landing: ${winner.distToLanding.toFixed(1)}m, ETA: ${winner.eta.toFixed(1)}s`);
+        
+        // Debug: Show top 3 candidates for transparency
+        console.log(`📊 Top candidates by distance:`);
+        for (let i = 0; i < Math.min(3, candidates.length); i++) {
+            const candidate = candidates[i];
+            console.log(`   ${i + 1}. ${candidate.fielder.userData.description}: ${candidate.distToLanding.toFixed(1)}m (${candidate.eta.toFixed(1)}s)`);
+        }
         
         return winner;
     }
@@ -3454,6 +3580,22 @@ class CricketGame {
             }
         }
         
+        // ✅ FIX: Fine Leg should only chase leg-side shots behind wicket or direct behind shots
+        if (description.includes('fine leg')) {
+            // Fine Leg is positioned behind wicket on leg side (-12, 12)
+            // Should only chase shots that go behind the wicket on the leg side
+            if (shotDirection === 'straight' || shotDirection === 'offSide') {
+                console.log(`🚫 ${fielder.userData.description} excluded: fine leg for ${shotDirection} shot`);
+                return false;
+            }
+            
+            // For leg-side shots, only chase if ball goes behind the wicket
+            if (shotDirection === 'legSide' && landingPos.z < 9) {
+                console.log(`🚫 ${fielder.userData.description} excluded: fine leg for leg-side shot in front of wicket (z=${landingPos.z.toFixed(1)})`);
+                return false;
+            }
+        }
+        
         return true;
     }
 
@@ -3474,6 +3616,16 @@ class CricketGame {
         if (description.includes('gully')) {
             if (shotDirection !== 'offSide' && shotDirection !== 'behind') {
                 console.log(`🚫 ${fielder.userData.description} excluded from aerial catch: gully for ${shotDirection} shot`);
+                return false;
+            }
+        }
+        
+        // ✅ FIX: Fine Leg should only attempt aerial catches for leg-side or behind shots
+        if (description.includes('fine leg')) {
+            // Fine Leg is positioned behind wicket on leg side (-12, 12)
+            // Should only attempt catches for shots that go in their direction
+            if (shotDirection === 'straight' || shotDirection === 'offSide') {
+                console.log(`🚫 ${fielder.userData.description} excluded from aerial catch: fine leg for ${shotDirection} shot`);
                 return false;
             }
         }
@@ -3527,10 +3679,11 @@ class CricketGame {
             }
         }
         
-        // Convert angular distance to time penalty (max 2 seconds penalty for 90 degrees off)
-        const penalty = (angularDistance / 90) * 2.0;
+        // Convert angular distance to time penalty (max 4 seconds penalty for 90 degrees off)
+        // ✅ INCREASED: More realistic cricket penalty for poor positioning
+        const penalty = (angularDistance / 90) * 4.0;
         
-        return Math.min(penalty, 2.0); // Cap at 2 seconds
+        return Math.min(penalty, 4.0); // Cap at 4 seconds
     }
 
     // ✅ NEW: Assign fielding task
@@ -3581,7 +3734,7 @@ class CricketGame {
         }
     }
 
-    // ✅ NEW: Check if we should hand over task to a better fielder
+    // ✅ IMPROVED: Check if we should hand over task to a better fielder
     shouldHandoverTask(newCandidate, currentTime) {
         if (!this.fieldingSystem.currentTask) return false;
         
@@ -3597,17 +3750,60 @@ class CricketGame {
             return false;
         }
         
-        // Calculate ETA advantage
-        const landingPos = this.predictBallLanding();
-        if (!landingPos) return false;
+        // ✅ FIX: Get current ball position for immediate distance check
+        const ballPos = this.cricketBall.position.clone();
+        const currentDistanceToBall = currentFielder.position.distanceTo(ballPos);
         
-        const currentETA = currentFielder.position.distanceTo(landingPos) / currentFielder.userData.topSpeed;
-        const newETA = newCandidate.eta;
+        // ✅ FIX: If current fielder is very close to the ball, DON'T handover
+        if (currentDistanceToBall < 4.0) {
+            console.log(`🚫 No handover: ${currentFielder.userData.description} too close to ball (${currentDistanceToBall.toFixed(1)}m)`);
+            return false;
+        }
+        
+        // ✅ FIX: If current fielder is actively chasing and making good progress, don't handover
+        const currentState = this.fieldingSystem.fielderStates.get(currentFielder.userData.description);
+        if (currentState === 'chasing' && currentFielder.userData.chaseStartTime) {
+            const chaseDuration = currentTime - currentFielder.userData.chaseStartTime;
+            // If fielder has been chasing for less than 2 seconds, let them continue
+            if (chaseDuration < 2000) {
+                console.log(`🚫 No handover: ${currentFielder.userData.description} just started chasing (${chaseDuration}ms ago)`);
+                return false;
+            }
+        }
+        
+        // Calculate ETA advantage using landing position
+        const landingPos = this.predictBallLanding();
+        if (!landingPos) {
+            console.log(`🚫 No handover: could not predict ball landing`);
+            return false;
+        }
+        
+        // ✅ FIX: Validate topSpeed to prevent NaN ETAs
+        const currentTopSpeed = currentFielder.userData.topSpeed || this.fieldingSystem.DEFAULT_TOP_SPEED;
+        const currentDistanceToLanding = currentFielder.position.distanceTo(landingPos);
+        const currentETA = currentDistanceToLanding / currentTopSpeed;
+        
+        const newETA = newCandidate.eta || Infinity;
+        
+        // ✅ FIX: Validate ETAs before calculation
+        if (!isFinite(currentETA) || !isFinite(newETA)) {
+            console.log(`🚫 No handover: invalid ETA values (current: ${currentETA}, new: ${newETA})`);
+            return false;
+        }
         
         const advantage = currentETA - newETA;
         
         console.log(`🤔 Handover check: current ETA=${currentETA.toFixed(1)}s, new ETA=${newETA.toFixed(1)}s, advantage=${advantage.toFixed(1)}s`);
+        console.log(`   Current dist to ball: ${currentDistanceToBall.toFixed(1)}m, to landing: ${currentDistanceToLanding.toFixed(1)}m`);
         
+        // ✅ FIX: Additional check - if current fielder is reasonably positioned, don't handover  
+        // unless new candidate has a VERY significant advantage
+        if (currentDistanceToLanding < 15.0 && advantage < this.fieldingSystem.HANDOVER_MARGIN_SEC * 2) {
+            console.log(`🚫 No handover: current fielder reasonably positioned (${currentDistanceToLanding.toFixed(1)}m), advantage insufficient`);
+            return false;
+        }
+        
+        // ✅ FIX: Require significant advantage for handover (reduce unnecessary switches)
         return advantage > this.fieldingSystem.HANDOVER_MARGIN_SEC;
     }
 
@@ -3619,7 +3815,6 @@ class CricketGame {
         const currentFielder = this.fieldingSystem.currentTask.fielder;
         if (currentFielder && currentFielder.userData && currentFielder.userData.description) {
             console.log(`🔄 Clearing task for ${currentFielder.userData.description}`);
-            this.fieldingSystem.fielderStates.set(currentFielder.userData.description, 'idle');
             
             // Clear fielder-specific flags
             currentFielder.userData.isRunningForAnticipation = false;
@@ -3634,11 +3829,13 @@ class CricketGame {
         // Mark handover time
         fielder.userData.lastHandoverTime = Date.now();
         
-        // Reset fielder state
+        // Reset fielder state and start returning to original position
         const currentState = this.fieldingSystem.fielderStates.get(fielder.userData.description);
         if (currentState !== 'idle') {
-            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
-            console.log(`🔄 Clearing task: ${fielder.userData.description} -> idle`);
+            console.log(`🔄 Clearing task: ${fielder.userData.description} -> returning to original position`);
+            
+            // ✅ FIX: Make fielder return to their original position instead of staying stuck
+            this.startFielderReturning(fielder);
         }
         
         // Clear task references
@@ -3651,6 +3848,45 @@ class CricketGame {
         }
     }
 
+    // ✅ NEW: Find nearest idle fielder to a position
+    findNearestIdleFielder(position, maxDistance = Infinity) {
+        let nearestFielder = null;
+        let shortestDistance = maxDistance;
+
+        this.fielders.forEach(fielder => {
+            if (!fielder.userData || !fielder.userData.description) return;
+            
+            const state = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+            if (state === 'idle') {
+                const distance = fielder.position.distanceTo(position);
+                if (distance < shortestDistance) {
+                    shortestDistance = distance;
+                    nearestFielder = fielder;
+                }
+            }
+        });
+
+        return nearestFielder ? { fielder: nearestFielder, distance: shortestDistance } : null;
+    }
+
+    // ✅ NEW: Find nearest fielder to a position (any state)
+    findNearestFielder(position, maxDistance = Infinity) {
+        let nearestFielder = null;
+        let shortestDistance = maxDistance;
+
+        this.fielders.forEach(fielder => {
+            if (!fielder.userData || !fielder.userData.description) return;
+            
+            const distance = fielder.position.distanceTo(position);
+            if (distance < shortestDistance) {
+                shortestDistance = distance;
+                nearestFielder = fielder;
+            }
+        });
+
+        return nearestFielder ? { fielder: nearestFielder, distance: shortestDistance } : null;
+    }
+
     // ✅ NEW: Assign nearest fielder to collect stationary ball
     assignNearestFielderToStationaryBall() {
         if (!this.cricketBall || !this.fielders || this.fielders.length === 0) {
@@ -3659,33 +3895,29 @@ class CricketGame {
             return;
         }
 
-        // Find the nearest idle fielder to the ball
+        // Find the nearest fielder to the ball (regardless of current state)
         const ballPos = this.cricketBall.position.clone();
-        let nearestFielder = null;
-        let shortestDistance = Infinity;
+        const nearestResult = this.findNearestFielder(ballPos);
 
-        this.fielders.forEach(fielder => {
-            if (!fielder.userData || !fielder.userData.description) return;
-            
-            const state = this.fieldingSystem.fielderStates.get(fielder.userData.description);
-            if (state === 'idle') {
-                const distance = fielder.position.distanceTo(ballPos);
-                if (distance < shortestDistance) {
-                    shortestDistance = distance;
-                    nearestFielder = fielder;
-                }
-            }
-        });
-
-        if (!nearestFielder) {
-            console.log('❌ No idle fielders available - force completing ball');
+        if (!nearestResult) {
+            console.log('❌ No fielders available - force completing ball');
             this.forceCompleteBall();
             return;
         }
 
-        console.log(`🚶 ${nearestFielder.userData.description} collecting stationary ball (${shortestDistance.toFixed(1)}m away)`);
+        const { fielder: nearestFielder, distance: shortestDistance } = nearestResult;
+        const fielderState = this.fieldingSystem.fielderStates.get(nearestFielder.userData.description);
+
+        console.log(`🎯 Nearest fielder to stationary ball: ${nearestFielder.userData.description} (${shortestDistance.toFixed(1)}m away, currently ${fielderState})`);
         
-        // Clear any existing task and assign collection task
+        // Check if nearest fielder is already chasing the ball
+        if (fielderState === 'chasing' && this.fieldingSystem.chasingFielder === nearestFielder) {
+            console.log(`✅ ${nearestFielder.userData.description} already chasing - letting them continue`);
+            return; // Let them continue, no changes needed
+        }
+        
+        // Clear any existing task and assign the nearest fielder
+        console.log(`🔄 Assigning ${nearestFielder.userData.description} to collect stationary ball`);
         this.clearCurrentTask();
         
         // Create collection task
@@ -4181,6 +4413,12 @@ class CricketGame {
     executeDirectCatch(fielder) {
         if (!fielder || !this.cricketBall) return;
         
+        // ✅ FIX: Check if catch is already in progress to prevent multiple animations
+        if (this.fieldingSystem.catchingSystem.catchInProgress) {
+            console.log(`⚠️ Catch already in progress by ${this.fieldingSystem.catchingSystem.catchingFielder?.userData?.description || 'unknown'} - skipping executeDirectCatch`);
+            return;
+        }
+        
         console.log(`🥎 ${fielder.userData.description} executing direct catch/pickup!`);
         
         // Calculate distance to ball
@@ -4229,8 +4467,10 @@ class CricketGame {
             console.log(`✋ ${fielder.userData.description} going for a regular catch! (${distance.toFixed(1)}m away, ${(catchProbability * 100).toFixed(1)}% chance)`);
         }
         
-        // Set fielder state to catching
+        // Set fielder state to catching and mark catch in progress
         this.fieldingSystem.fielderStates.set(fielder.userData.description, 'catching');
+        this.fieldingSystem.catchingSystem.catchInProgress = true;
+        this.fieldingSystem.catchingSystem.catchingFielder = fielder;
         
         // ✅ FIX: Stop ball immediately when catch attempt begins to prevent visual trail issue
         const ballVelocityBackup = this.ballPhysics.velocity.clone(); // Backup for potential dropped catch
@@ -4244,6 +4484,12 @@ class CricketGame {
         fielder.userData.ballVelocityBackup = ballVelocityBackup;
         
         console.log(`🛑 Ball stopped during direct catch attempt to prevent visual trail past fielder`);
+        
+        // ✅ FIX: Stop any current animation before starting catch animation
+        if (fielder.userData.currentAction) {
+            fielder.userData.currentAction.stop();
+            fielder.userData.currentAction = null;
+        }
         
         // Load and play catch animation
         this.loadCharacterAnimation(fielder, catchAnimation, fielder.userData.description);
@@ -4536,6 +4782,9 @@ class CricketGame {
         
         this.ballPhysics.isMoving = true;
         
+        // ✅ FIX: Track that ball is now coming from fielder (not eligible for catch wickets)
+        this.ballPhysics.ballSource = 'fielder';
+        
         
         // Calculate estimated time to target for timeout
         const horizontalSpeed = Math.sqrt(this.ballPhysics.velocity.x ** 2 + this.ballPhysics.velocity.z ** 2);
@@ -4738,6 +4987,12 @@ class CricketGame {
             console.log(`🤸‍♂️ ${fielder.userData.description} going for a diving catch!`);
         } else {
             console.log(`✋ ${fielder.userData.description} going for a regular catch!`);
+        }
+
+        // ✅ FIX: Stop any current animation before starting catch animation
+        if (fielder.userData.currentAction) {
+            fielder.userData.currentAction.stop();
+            fielder.userData.currentAction = null;
         }
 
         // Load and play catch animation
@@ -5028,6 +5283,7 @@ class CricketGame {
         // ✅ NEW: Clear hybrid system state
         this.fieldingSystem.currentTask = null;
         this.fieldingSystem.nextSelectionTime = 0;
+        this.fieldingSystem.shotDirection = null; // Clear locked shot direction
         
         // Return all fielders to their original positions and idle state
         this.fielders.forEach(fielder => {
@@ -5163,6 +5419,9 @@ class CricketGame {
         this.bowlerReceivingSystem.isReceivingThrow = false;
         
         this.resetBallTracking();
+        
+        // Reset ball source tracking
+        this.ballPhysics.ballSource = 'none';
         
         console.log('🏏 New ball started');
     }
@@ -5452,6 +5711,7 @@ class CricketGame {
             this.cricketBall.position.set(0, 0.035, 0);
             this.ballPhysics.velocity.set(0, 0, 0);
             this.ballPhysics.isMoving = false;
+            this.ballPhysics.ballSource = 'none'; // Reset ball source
         }
         
         // Clear ball trail completely
@@ -8662,6 +8922,11 @@ class CricketGame {
             !this.ballPhysics.isMoving) {
             return;
         }
+        
+        // ✅ FIX: Only allow catch wickets when ball comes directly from batsman
+        if (this.ballPhysics.ballSource !== 'batsman') {
+            return; // Skip catch detection for fielder throws and bowler deliveries
+        }
 
         const ballPos = this.cricketBall.position;
         const ballHeight = ballPos.y;
@@ -8967,6 +9232,12 @@ class CricketGame {
         document.getElementById('resetFieldingBtn').style.display = 'block';
         document.getElementById('exitFieldingBtn').style.display = 'block';
         
+        // ✅ NEW: Move fielding controls to right side to avoid overlap with manual bowling modal
+        const fieldingControls = document.getElementById('fieldingControls');
+        if (fieldingControls) {
+            fieldingControls.classList.add('fielding-active');
+        }
+        
         // Add visual indicators to all fielders
         this.addFielderIndicators();
         
@@ -8989,6 +9260,12 @@ class CricketGame {
         document.getElementById('fieldingModeBtn').style.display = 'block';
         document.getElementById('resetFieldingBtn').style.display = 'none';
         document.getElementById('exitFieldingBtn').style.display = 'none';
+        
+        // ✅ NEW: Move fielding controls back to left side
+        const fieldingControls = document.getElementById('fieldingControls');
+        if (fieldingControls) {
+            fieldingControls.classList.remove('fielding-active');
+        }
         
         // Remove visual indicators
         this.removeFielderIndicators();
@@ -10678,6 +10955,10 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  testShotFielderSelection("lateCut") - test behind wicket');
             console.log('  debugFieldingLive() - real-time analysis during play');
             console.log('  showFieldCoords() - show all fielder positions');
+            console.log('🏏 SHOT BALANCE TESTING:');
+            console.log('  testShotBalance() - analyze rebalanced shot power system');
+            console.log('  testTimingDifficulty("slog") - test shot timing difficulty');
+            console.log('  testTimingDifficulty("upperCut") - test aggressive shot timing');
             console.log('');
             console.log('🎯 WHAT TO LOOK FOR:');
             console.log('  ✅ Off-side shots → Cover, Point, Gully fielders respond');
@@ -10687,6 +10968,50 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  ✅ NO MORE First Slip chasing every shot!');
             console.log('');
             console.log('Try: bowlStraight() then playCoverDrive() - Cover should respond, not Slip!');
+        };
+        
+        // ✅ NEW: Test Fine Leg filtering specifically
+        window.testFineLegFiltering = () => {
+            console.log('🧪 Testing Fine Leg directional filtering:');
+            console.log('==========================================');
+            
+            const testShots = [
+                { name: 'straightDrive', direction: 'straight' },
+                { name: 'coverDrive', direction: 'offSide' },
+                { name: 'pullShot', direction: 'legSide' },
+                { name: 'hookShot', direction: 'legSide' },
+                { name: 'legGlance', direction: 'behind' },
+                { name: 'lateCut', direction: 'behind' }
+            ];
+            
+            const fineLeg = game.fielders.find(f => f.userData.description === 'Fine Leg');
+            if (!fineLeg) {
+                console.log('❌ Fine Leg not found');
+                return;
+            }
+            
+            testShots.forEach(testShot => {
+                const shot = game.shotTypes[testShot.name];
+                if (!shot) return;
+                
+                // Simulate ball landing position based on shot direction
+                let landingPos = new THREE.Vector3();
+                switch (testShot.direction) {
+                    case 'straight': landingPos.set(0, 0, -20); break;
+                    case 'offSide': landingPos.set(20, 0, -10); break;
+                    case 'legSide': landingPos.set(-15, 0, -5); break;
+                    case 'behind': landingPos.set(-10, 0, 15); break;
+                }
+                
+                const suitable = game.isFielderSuitableForGroundChase(fineLeg, testShot.direction, landingPos);
+                const result = suitable ? '✅ WILL CHASE' : '🚫 EXCLUDED';
+                console.log(`${shot.description} (${testShot.direction}): ${result}`);
+            });
+            
+            console.log('');
+            console.log('Expected results:');
+            console.log('  ✅ Hook Shot & Leg Glance & Late Cut should be chased');
+            console.log('  🚫 Straight Drive & Cover Drive should be excluded');
         };
         
         // ✅ NEW: Test shot-specific fielder selection
@@ -10725,6 +11050,71 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Show how this differs from old system (closest to batsman)
             const batsmanPos = new THREE.Vector3(0, 0, 9);
+        };
+        
+        // ✅ NEW: Test the rebalanced shot system
+        window.testShotBalance = () => {
+            console.log('🏏 Shot Balance Analysis - Rebalanced for Cricket Realism:');
+            console.log('═══════════════════════════════════════════════════════════');
+            
+            Object.keys(game.shotTypes).forEach(shotType => {
+                const shot = game.shotTypes[shotType];
+                const finalPower = shot.power * 10; // Base calculation
+                const perfectPower = finalPower * 1.4; // Perfect timing bonus
+                const poorPower = finalPower * (shot.difficulty === 'very_hard' ? 0.4 : 0.6);
+                
+                console.log(`${shot.description}:`);
+                console.log(`  Power: ${shot.power} | Height: ${shot.height} | Difficulty: ${shot.difficulty}`);
+                console.log(`  Range: ${poorPower.toFixed(1)} (poor) → ${perfectPower.toFixed(1)} (perfect)`);
+                
+                if (shot.difficulty === 'very_hard') {
+                    console.log(`  ⚠️  HIGH RISK: Requires 90%+ timing accuracy for perfect shots`);
+                } else if (shot.difficulty === 'hard') {
+                    console.log(`  ⚡ MODERATE RISK: Requires 85%+ timing accuracy for perfect shots`);
+                } else {
+                    console.log(`  ✅ SAFER OPTION: Standard timing windows`);
+                }
+                console.log('');
+            });
+            
+            console.log('🎯 Key Changes Made:');
+            console.log('  • Reduced slog power: 2.5 → 2.0');
+            console.log('  • Reduced uppercut power: 2.2 → 1.9');
+            console.log('  • Reduced helicopter power: 2.5 → 2.1');
+            console.log('  • Reduced powerShot power: 3.0 → 2.3');
+            console.log('  • Added difficulty-based timing system');
+            console.log('  • Aggressive shots require better timing but are playable');
+            console.log('  • Poor timing reduces power/accuracy but shots still viable');
+        };
+        
+        window.testTimingDifficulty = (shotType) => {
+            console.log(`🧪 Testing timing difficulty for ${shotType}:`);
+            
+            const shot = game.shotTypes[shotType];
+            if (!shot) {
+                console.log(`❌ Shot type '${shotType}' not found`);
+                return;
+            }
+            
+            console.log(`Shot: ${shot.description} (${shot.difficulty} difficulty)`);
+            console.log('Timing thresholds:');
+            
+            const perfectThreshold = shot.difficulty === 'very_hard' ? 0.85 : 
+                                    shot.difficulty === 'hard' ? 0.80 : 
+                                    shot.difficulty === 'medium' ? 0.80 : 0.75;
+            
+            const goodThreshold = shot.difficulty === 'very_hard' ? 0.65 : 
+                                 shot.difficulty === 'hard' ? 0.60 : 
+                                 shot.difficulty === 'medium' ? 0.60 : 0.55;
+            
+            console.log(`  Perfect: ${(perfectThreshold * 100).toFixed(0)}%+ accuracy needed`);
+            console.log(`  Good: ${(goodThreshold * 100).toFixed(0)}%+ accuracy needed`);
+            console.log(`  Okay: ${((shot.difficulty === 'very_hard' ? 0.45 : 0.40) * 100).toFixed(0)}%+ accuracy needed`);
+            console.log(`  Poor: Below ${((shot.difficulty === 'very_hard' ? 0.45 : 0.40) * 100).toFixed(0)}% accuracy`);
+            
+            if (shot.difficulty === 'very_hard') {
+                console.log('⚠️ CHALLENGING: Requires good timing but rewards skill!');
+            }
             let closestToBatsman = null;
             let closestDist = Infinity;
             

@@ -210,6 +210,24 @@ body {
     pointer-events: none !important;
 }
 
+/* Create horizontal layout for reset button when fielding is active */
+.fielding-controls.fielding-active {
+    z-index: 10002 !important; /* Higher than manual bowling modals */
+}
+
+.fielding-controls.fielding-active .fielding-button-row {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 15px !important;
+    align-items: center !important;
+}
+
+/* Adjust button width for horizontal layout */
+.fielding-controls.fielding-active .fielding-button-row .fielding-btn {
+    min-width: 160px !important;
+    flex: 0 0 auto !important;
+}
+
 .fielding-btn {
     background: rgba(10, 10, 26, 0.9) !important;
     color: white !important;
