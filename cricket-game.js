@@ -5,6 +5,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 // Cricket Game - Three.js Implementation
+// ✅ HYBRID FIELDING SYSTEM v2.0:
+// - Debounced selection (120ms) for stable ball trajectory
+// - Pass A: Aerial catch detection with role-based priority
+// - Pass B: Ground chase with ETA-based selection 
+// - Periodic re-evaluation (250ms) with handover logic
+// - Dynamic position tracking and abort-catch detection
+// - Debug overlay available (press 'F' in-game)
+
 class CricketGame {
     constructor() {
         this.scene = null;
@@ -104,8 +112,8 @@ class CricketGame {
             reverseSwep: { power: 1.8, direction: [0.8, 0, 0.6], height: 0.3, description: 'Reverse Sweep' },
             
             // Aggressive shots
-            slog: { power: 3.0, direction: [-0.7, 0, -0.7], height: 0.8, description: 'Slog' },
-            helicopter: { power: 3.2, direction: [0, 0, -1], height: 0.9, description: 'Helicopter Shot' },
+            slog: { power: 2.5, direction: [-0.7, 0, -0.7], height: 0.8, description: 'Slog' },
+            helicopter: { power: 2.5, direction: [0, 0, -1], height: 0.9, description: 'Helicopter Shot' },
             
             // Power variations
             lightTap: { power: 0.4, direction: [0, 0, -1], height: 0.05, description: 'Light Tap' },
@@ -127,7 +135,7 @@ class CricketGame {
             originalPosition: null // Store bowler's original position
         };
         
-        // Fielding system
+        // Fielding system with hybrid approach
         this.fieldingSystem = {
             ballIsHit: false,
             nearestFielder: null,
@@ -135,13 +143,33 @@ class CricketGame {
             ballLastPosition: new THREE.Vector3(),
             fielderStates: new Map(), // Track fielder states: 'idle', 'chasing', 'throwing', 'returning', 'catching'
             fielderOriginalPositions: new Map(), // Store original fielding positions
-            // Fielding zones for better assignment
+            
+            // Hybrid fielding constants
+            DEBOUNCE_MS: 120,
+            RE_EVAL_INTERVAL_MS: 250,
+            HANDOVER_MARGIN_SEC: 0.7,
+            HANDOVER_COOLDOWN_MS: 500,
+            MAX_CATCH_INTERCEPT_DIST: 25,
+            DEFAULT_TOP_SPEED: 8.0,
+            MIN_AERIAL_HEIGHT: 1.5,
+            KEEPER_BOWLER_PRIORITY_RADIUS: 15,
+            
+            // Current task tracking
+            currentTask: null, // { fielder, mode: 'catch'|'ground', lastEval, startTime }
+            nextSelectionTime: 0,
+            
+            // Fielding zones for better assignment (legacy support)
             fieldingZones: {
                 'straight': ['Mid Off', 'Mid On'],
                 'offSide': ['Cover', 'Point', 'Gully', 'Third Man'],
                 'legSide': ['Square Leg', 'Fine Leg', 'Mid On'],
                 'behind': ['First Slip', 'Fine Leg']
             },
+            
+            // Dynamic sector mapping (12 sectors around the field)
+            sectorMap: new Map(), // sector index -> [fielders]
+            TOTAL_SECTORS: 12,
+            
             // Catching system
             catchingSystem: {
                 catchRadius: 5.0, // 5-meter radius for catch detection
@@ -609,6 +637,10 @@ class CricketGame {
             this.createBallTrail();
             this.createScoreboards();
             this.createScorecardUI();
+            
+            // ✅ NEW: Create fielding debug overlay
+            this.createFieldingDebugOverlay();
+            
             this.addEventListeners();
             this.completeLoadingStep('Game Systems');
             
@@ -3104,7 +3136,7 @@ class CricketGame {
     }
 
     onBallHit() {
-        console.log('🎯 Ball has been hit! Activating fielding system...');
+        console.log('🎯 Ball has been hit! Activating hybrid fielding system...');
         
         this.fieldingSystem.ballIsHit = true;
         this.fieldingSystem.ballLastPosition.copy(this.cricketBall.position);
@@ -3119,124 +3151,560 @@ class CricketGame {
             }
         });
         
-        // ✅ IMPROVED: Immediate response - no artificial delay
-        console.log('🔍 Checking for immediate opportunities and assigning fielders...');
+        // ✅ NEW: Set debounce timer for hybrid selection
+        this.fieldingSystem.nextSelectionTime = Date.now() + this.fieldingSystem.DEBOUNCE_MS;
+        this.fieldingSystem.currentTask = null; // Clear any previous task
         
-        // The real-time catch detection will handle in-flight catches
-        // This handles ground fielding assignment
+        console.log(`🕐 Fielding selection debounce set for ${this.fieldingSystem.DEBOUNCE_MS}ms...`);
+        
+        // The hybrid selection will trigger after debounce in assignFielderIfNeeded
         this.assignFielderIfNeeded();
     }
     
     assignFielderIfNeeded() {
-        // Only assign if no catch in progress, ball still moving, and nobody chasing yet
-        if (this.fieldingSystem.catchingSystem.catchInProgress ||
-            !this.ballPhysics.isMoving ||
-            this.fieldingSystem.chasingFielder) {
-            console.log('🚫 Fielding already in progress or ball stopped');
+        const now = Date.now();
+        
+        // Check debounce timer
+        if (now < this.fieldingSystem.nextSelectionTime) {
+            return; // Still in debounce period
+        }
+        
+        // Check if we need to re-evaluate
+        if (this.fieldingSystem.currentTask && 
+            (now - this.fieldingSystem.currentTask.lastEval) < this.fieldingSystem.RE_EVAL_INTERVAL_MS) {
+            return; // Too soon for re-evaluation
+        }
+        
+        // Only proceed if ball is still moving and no catch locked in
+        if (!this.ballPhysics.isMoving) {
+            console.log('🚫 Ball stopped - no fielding needed');
             return;
         }
-
-        console.log('🎯 Assigning fielder');
         
-        const ballPos = this.cricketBall.position;
+        // ✅ FIX: Check if ball has slowed down significantly - assign nearest fielder to collect it
+        const currentBallSpeed = this.ballPhysics.velocity.length();
+        if (currentBallSpeed < 1.0) { // Ball nearly stopped
+            console.log('🚫 Ball too slow - assigning nearest fielder to collect stationary ball');
+            this.assignNearestFielderToStationaryBall();
+            return;
+        }
+        
+        // ✅ FIX: Auto-reset if fielding has been going on too long (edge case protection)
+        if (this.fieldingSystem.currentTask) {
+            const taskDuration = now - this.fieldingSystem.currentTask.startTime;
+            if (taskDuration > 15000) { // 15 seconds max
+                console.log('⏰ Fielding task timeout - auto-resetting');
+                this.resetFieldingSystem();
+                return;
+            }
+        }
+        
+        console.log('🎯 Running hybrid fielder selection...');
+        
+        const ballPos = this.cricketBall.position.clone();
         const ballVelocity = this.ballPhysics.velocity.clone();
         
-        // ✅ IMPROVED: Determine shot direction/zone first
-        const shotZone = this.determineShotZone(ballVelocity);
-        console.log(`📍 Shot detected in ${shotZone} zone`);
+        // Calculate ball characteristics for decision making
+        const ballHeight = ballPos.y;
+        const ballSpeed = ballVelocity.length();
+        const timeToLand = this.calculateTimeToLand();
         
-        // ✅ Get fielders in the appropriate zone first
-        const preferredFielders = this.getFieldersInZone(shotZone);
-        const allFielders = this.fielders.filter(f => 
-            this.fieldingSystem.fielderStates.get(f.userData.description) === 'idle'
-        );
+        console.log(`📊 Ball stats: height=${ballHeight.toFixed(1)}m, speed=${ballSpeed.toFixed(1)}m/s, timeToLand=${timeToLand.toFixed(1)}s`);
         
-        // ✅ IMPROVED: Prioritize fielders by zone relevance + distance
-        let selectedFielder = null;
-        let bestScore = Infinity;
-        let strategy = '';
+        // PASS A: Try to find aerial catcher
+        const aerialCatcher = this.selectAerialCatcher(ballPos, ballVelocity, ballHeight, timeToLand);
         
-        // Predict where the ball will hit the ground for backup assignment
-        const landingPos = this.predictBallLanding();
-        
-        // First, try fielders in the preferred zone
-        preferredFielders.forEach(f => {
-            if (this.fieldingSystem.fielderStates.get(f.userData.description) !== 'idle') return;
-            
-            const ballDistance = f.position.distanceTo(ballPos);
-            const landingDistance = landingPos ? f.position.distanceTo(landingPos) : ballDistance;
-            
-            // Score = weighted combination of current ball distance + landing distance
-            // Prefer landing distance for ground shots, ball distance for high shots
-            const ballHeight = ballPos.y;
-            const isHighBall = ballHeight > 2.0;
-            const score = isHighBall ? 
-                (ballDistance * 0.7 + landingDistance * 0.3) : // High ball: prioritize current position
-                (ballDistance * 0.3 + landingDistance * 0.7);   // Low ball: prioritize landing
-            
-            if (score < bestScore) {
-                bestScore = score;
-                selectedFielder = f;
-                strategy = `zone-appropriate (${shotZone})`;
-            }
-        });
-        
-        // If no suitable fielder in preferred zone, use closest overall
-        if (!selectedFielder) {
-            console.log(`⚠️ No suitable fielder in ${shotZone} zone, checking all fielders`);
-            
-            allFielders.forEach(f => {
-                const ballDistance = f.position.distanceTo(ballPos);
-                const landingDistance = landingPos ? f.position.distanceTo(landingPos) : ballDistance;
-                
-                // Use landing distance as primary for ground fielding
-                const score = ballPos.y > 2.0 ? ballDistance : landingDistance;
-                
-                if (score < bestScore) {
-                    bestScore = score;
-                    selectedFielder = f;
-                    strategy = `closest overall (${score.toFixed(1)}m)`;
-                }
-            });
-        }
-        
-        if (!selectedFielder) {
-            console.log('⚠️ No suitable fielders available');
+        if (aerialCatcher) {
+            // Assign aerial catch task
+            this.assignFieldingTask(aerialCatcher.fielder, 'catch', now);
             return;
         }
         
-        console.log(`🎯 Selected ${selectedFielder.userData.description} - ${strategy}`);
-        console.log(`   Ball velocity: (${ballVelocity.x.toFixed(1)}, ${ballVelocity.y.toFixed(1)}, ${ballVelocity.z.toFixed(1)})`);
+        // PASS B: Find ground chaser
+        const groundChaser = this.selectGroundChaser(ballPos, ballVelocity, timeToLand);
         
-        // Set this fielder as the chaser
-        this.fieldingSystem.chasingFielder = selectedFielder;
+        if (groundChaser) {
+            // Check for handover if we already have a task
+            if (this.fieldingSystem.currentTask) {
+                const shouldHandover = this.shouldHandoverTask(groundChaser, now);
+                if (shouldHandover) {
+                    console.log(`🔄 Handing over from ${this.fieldingSystem.currentTask.fielder.userData.description} to ${groundChaser.fielder.userData.description}`);
+                    this.clearCurrentTask();
+                }
+            }
+            
+            if (!this.fieldingSystem.currentTask) {
+                this.assignFieldingTask(groundChaser.fielder, 'ground', now);
+            }
+        }
+        
+        // Update evaluation time regardless
+        if (this.fieldingSystem.currentTask) {
+            this.fieldingSystem.currentTask.lastEval = now;
+        }
+    }
 
-        // Decide catch vs. ground‑field based on ball characteristics
-        const ballHeight = this.cricketBall.position.y;
-        const ballSpeed = this.ballPhysics.velocity.length();
-        const closestBallDist = selectedFielder.position.distanceTo(ballPos);
+    // ✅ NEW: PASS A - Select aerial catcher
+    selectAerialCatcher(ballPos, ballVelocity, ballHeight, timeToLand) {
+        // Skip if ball too low for aerial catch
+        if (ballHeight < this.fieldingSystem.MIN_AERIAL_HEIGHT) {
+            console.log(`⬇️ Ball too low (${ballHeight.toFixed(1)}m) for aerial catch - skipping Pass A`);
+            return null;
+        }
         
-        if (ballHeight > 1.0 && ballSpeed > 5.0 && closestBallDist <= 15) {
-            // → High, fast ball and fielder is reasonably close: try direct intercept
-            const intercept = this.calculateInterceptPoint(
-                selectedFielder,
-                this.fieldingSystem.catchingSystem.anticipationTime
+        console.log('🎯 Pass A: Looking for aerial catcher...');
+        
+        const landingPos = this.predictBallLanding();
+        if (!landingPos) {
+            console.log('❌ Could not predict landing - skipping aerial catch');
+            return null;
+        }
+        
+        const candidates = [];
+        
+        // ✅ FIX: Determine shot direction for aerial catch filtering too
+        const shotDirection = this.determineShotDirection(ballVelocity, landingPos);
+        
+        // Evaluate each idle fielder for aerial catch capability
+        this.fielders.forEach(fielder => {
+            if (this.fieldingSystem.fielderStates.get(fielder.userData.description) !== 'idle') {
+                return;
+            }
+            
+            // ✅ FIX: Apply basic role filtering for aerial catches
+            if (!this.isFielderSuitableForAerialCatch(fielder, shotDirection, landingPos)) {
+                return;
+            }
+            
+            // Calculate intercept capability
+            const intercept = this.calculateInterceptPoint(fielder, timeToLand);
+            if (!intercept.canReach) return;
+            
+            // Check if within reasonable intercept distance
+            const interceptDist = fielder.position.distanceTo(intercept.position);
+            if (interceptDist > this.fieldingSystem.MAX_CATCH_INTERCEPT_DIST) return;
+            
+            // Calculate catch probability
+            const catchProb = this.calculateCatchProbability(fielder, ballPos, ballVelocity, interceptDist);
+            if (catchProb < 0.15) return; // Minimum 15% chance
+            
+            candidates.push({
+                fielder,
+                intercept,
+                catchProb,
+                eta: intercept.timeToReach
+            });
+        });
+        
+        if (candidates.length === 0) {
+            console.log('❌ No viable aerial catchers found');
+            return null;
+        }
+        
+        // Apply role-based filtering
+        const landingDistFromStumps = Math.sqrt(landingPos.x * landingPos.x + landingPos.z * landingPos.z);
+        
+        if (landingDistFromStumps < this.fieldingSystem.KEEPER_BOWLER_PRIORITY_RADIUS) {
+            // Prioritize keeper/bowler for close catches
+            const priorityCandidates = candidates.filter(c => 
+                c.fielder.userData.role === 'keeper' || c.fielder.userData.role === 'bowler'
             );
-            if (intercept.canReach) {
-                console.log(`🥎 ${selectedFielder.userData.description} will intercept in air at (${intercept.position.x.toFixed(1)}, ${intercept.position.z.toFixed(1)})`);
-                this.fieldingSystem.fielderStates.set(selectedFielder.userData.description, 'anticipating');
-                this.startDirectIntercept(selectedFielder, intercept.position);
+            
+            if (priorityCandidates.length > 0) {
+                console.log('👑 Prioritizing keeper/bowler for close aerial catch');
+                candidates.length = 0;
+                candidates.push(...priorityCandidates);
+            }
+        }
+        
+        // Sort by combination of ETA and catch probability
+        candidates.sort((a, b) => {
+            const scoreA = a.eta - (a.catchProb * 2); // Favor higher probability
+            const scoreB = b.eta - (b.catchProb * 2);
+            return scoreA - scoreB;
+        });
+        
+        const winner = candidates[0];
+        console.log(`✅ Pass A winner: ${winner.fielder.userData.description} (ETA: ${winner.eta.toFixed(1)}s, Prob: ${(winner.catchProb*100).toFixed(1)}%)`);
+        
+        return winner;
+    }
+
+    // ✅ NEW: PASS B - Select ground chaser
+    selectGroundChaser(ballPos, ballVelocity, timeToLand) {
+        console.log('🏃 Pass B: Looking for ground chaser...');
+        
+        const landingPos = this.predictBallLanding();
+        if (!landingPos) {
+            console.log('❌ Could not predict landing for ground chase');
+            return null;
+        }
+        
+        // ✅ FIX: Determine shot direction to filter appropriate fielders
+        const shotDirection = this.determineShotDirection(ballVelocity, landingPos);
+        console.log(`📍 Shot direction: ${shotDirection}`);
+        
+        const candidates = [];
+        
+        // Evaluate each idle fielder for ground fielding
+        this.fielders.forEach(fielder => {
+            if (this.fieldingSystem.fielderStates.get(fielder.userData.description) !== 'idle') {
+                return;
+            }
+            
+            // ✅ FIX: Apply role and directional filters
+            if (!this.isFielderSuitableForGroundChase(fielder, shotDirection, landingPos)) {
+                return;
+            }
+            
+            const distToLanding = fielder.position.distanceTo(landingPos);
+            // ✅ FIX: Add defensive check for topSpeed to prevent NaN ETA
+            const topSpeed = fielder.userData.topSpeed || this.fieldingSystem.DEFAULT_TOP_SPEED;
+            const eta = distToLanding / topSpeed;
+            
+            // ✅ FIX: Add directional penalty for fielders in wrong sector
+            const directionalPenalty = this.calculateDirectionalPenalty(fielder, shotDirection, landingPos);
+            const adjustedETA = eta + directionalPenalty;
+            
+            candidates.push({
+                fielder,
+                distToLanding,
+                eta: adjustedETA,
+                rawETA: eta,
+                directionalPenalty,
+                score: adjustedETA
+            });
+        });
+        
+        if (candidates.length === 0) {
+            console.log('❌ No suitable fielders for ground chase after filtering');
+            return null;
+        }
+        
+        // Sort by adjusted ETA (fastest to reach wins)
+        candidates.sort((a, b) => a.eta - b.eta);
+        
+        const winner = candidates[0];
+        console.log(`✅ Pass B winner: ${winner.fielder.userData.description}`);
+        console.log(`   Raw ETA: ${winner.rawETA.toFixed(1)}s, Directional penalty: ${winner.directionalPenalty.toFixed(1)}s, Final: ${winner.eta.toFixed(1)}s`);
+        
+        return winner;
+    }
+
+    // ✅ NEW: Determine shot direction based on velocity and landing position
+    determineShotDirection(ballVelocity, landingPos) {
+        const vx = ballVelocity.x;
+        const vz = ballVelocity.z;
+        const lx = landingPos.x;
+        const lz = landingPos.z;
+        
+        // Use both velocity and landing position for more accurate direction
+        const velocityAngle = Math.atan2(vx, -vz); // Negative vz because we want forward shots to be 0
+        const landingAngle = Math.atan2(lx, -lz + 9); // Relative to batsman end (z=9)
+        
+        // Weight landing position more heavily as it's more reliable
+        const combinedAngle = velocityAngle * 0.3 + landingAngle * 0.7;
+        
+        // Convert to degrees for easier understanding
+        let degrees = combinedAngle * 180 / Math.PI;
+        if (degrees < 0) degrees += 360;
+        
+        // Map to cricket field regions (from batsman's perspective)
+        if (degrees >= 315 || degrees < 45) return 'straight';
+        else if (degrees >= 45 && degrees < 135) return 'offSide';
+        else if (degrees >= 135 && degrees < 225) return 'behind'; 
+        else return 'legSide';
+    }
+
+    // ✅ NEW: Check if fielder is suitable for ground chase based on role and direction
+    isFielderSuitableForGroundChase(fielder, shotDirection, landingPos) {
+        const role = fielder.userData.role;
+        const description = fielder.userData.description.toLowerCase();
+        
+        // ✅ FIX: Slip fielders should NOT chase unless ball is specifically behind
+        if (description.includes('slip')) {
+            if (shotDirection !== 'behind') {
+                console.log(`🚫 ${fielder.userData.description} excluded: slip fielder for ${shotDirection} shot`);
+                return false;
+            }
+        }
+        
+        // ✅ FIX: Gully should only chase off-side shots behind the wicket
+        if (description.includes('gully')) {
+            if (shotDirection !== 'offSide' && shotDirection !== 'behind') {
+                console.log(`🚫 ${fielder.userData.description} excluded: gully for ${shotDirection} shot`);
+                return false;
+            }
+        }
+        
+        // ✅ FIX: Keep keeper close to stumps unless ball is very close
+        if (role === 'keeper') {
+            const distanceFromStumps = Math.sqrt(landingPos.x * landingPos.x + (landingPos.z - 9) * (landingPos.z - 9));
+            if (distanceFromStumps > 10) {
+                console.log(`🚫 ${fielder.userData.description} excluded: keeper for distant shot (${distanceFromStumps.toFixed(1)}m)`);
+                return false;
+            }
+        }
+        
+        // ✅ FIX: Bowler should only chase shots coming back towards them
+        if (role === 'bowler') {
+            if (shotDirection !== 'straight' && landingPos.z > 0) {
+                console.log(`🚫 ${fielder.userData.description} excluded: bowler for ${shotDirection} shot going away`);
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    // ✅ NEW: Check if fielder is suitable for aerial catch based on role and direction
+    isFielderSuitableForAerialCatch(fielder, shotDirection, landingPos) {
+        const role = fielder.userData.role;
+        const description = fielder.userData.description.toLowerCase();
+        
+        // ✅ FIX: Slip fielders should only catch balls behind the wicket
+        if (description.includes('slip')) {
+            if (shotDirection !== 'behind') {
+                console.log(`🚫 ${fielder.userData.description} excluded from aerial catch: slip fielder for ${shotDirection} shot`);
+                return false;
+            }
+        }
+        
+        // ✅ FIX: Gully should only catch off-side or behind shots
+        if (description.includes('gully')) {
+            if (shotDirection !== 'offSide' && shotDirection !== 'behind') {
+                console.log(`🚫 ${fielder.userData.description} excluded from aerial catch: gully for ${shotDirection} shot`);
+                return false;
+            }
+        }
+        
+        // For aerial catches, allow more flexibility for other roles since they can run to intercept
+        // But still exclude obviously wrong positions
+        
+        return true;
+    }
+
+    // ✅ NEW: Calculate penalty for fielders in wrong direction
+    calculateDirectionalPenalty(fielder, shotDirection, landingPos) {
+        const fielderPos = fielder.position;
+        const landingToFielder = fielderPos.clone().sub(landingPos);
+        
+        // Calculate angle from landing position to fielder
+        const fielderAngle = Math.atan2(landingToFielder.x, landingToFielder.z);
+        let fielderDegrees = fielderAngle * 180 / Math.PI;
+        if (fielderDegrees < 0) fielderDegrees += 360;
+        
+        // Get expected angle range for shot direction
+        let expectedAngleMin, expectedAngleMax;
+        switch (shotDirection) {
+            case 'straight': expectedAngleMin = 315; expectedAngleMax = 45; break;
+            case 'offSide': expectedAngleMin = 45; expectedAngleMax = 135; break;
+            case 'behind': expectedAngleMin = 135; expectedAngleMax = 225; break;
+            case 'legSide': expectedAngleMin = 225; expectedAngleMax = 315; break;
+            default: return 0;
+        }
+        
+        // Calculate angular distance from expected range
+        let angularDistance = 0;
+        
+        if (expectedAngleMin > expectedAngleMax) { // Crosses 0 degrees (straight shots)
+            if (fielderDegrees >= expectedAngleMin || fielderDegrees <= expectedAngleMax) {
+                angularDistance = 0; // In range
             } else {
-                console.log(`⚠️ ${selectedFielder.userData.description} can't reach intercept, chasing directly`);
-                this.fieldingSystem.fielderStates.set(selectedFielder.userData.description, 'chasing');
-                this.startFielderChasing(selectedFielder);
+                angularDistance = Math.min(
+                    Math.abs(fielderDegrees - expectedAngleMin),
+                    Math.abs(fielderDegrees - expectedAngleMax)
+                );
             }
         } else {
-            // → Ball is low, slow, or fielder is far: simple ground field
-            console.log(`🏃 ${selectedFielder.userData.description} will chase for ground fielding`);
-            this.fieldingSystem.fielderStates.set(selectedFielder.userData.description, 'chasing');
-            this.startFielderChasing(selectedFielder);
+            if (fielderDegrees >= expectedAngleMin && fielderDegrees <= expectedAngleMax) {
+                angularDistance = 0; // In range
+            } else {
+                angularDistance = Math.min(
+                    Math.abs(fielderDegrees - expectedAngleMin),
+                    Math.abs(fielderDegrees - expectedAngleMax)
+                );
+            }
         }
+        
+        // Convert angular distance to time penalty (max 2 seconds penalty for 90 degrees off)
+        const penalty = (angularDistance / 90) * 2.0;
+        
+        return Math.min(penalty, 2.0); // Cap at 2 seconds
+    }
+
+    // ✅ NEW: Assign fielding task
+    assignFieldingTask(fielder, mode, timestamp) {
+        // ✅ FIX: Add defensive checks
+        if (!fielder) {
+            console.error('❌ assignFieldingTask: fielder is null/undefined');
+            return;
+        }
+        
+        if (!fielder.userData) {
+            console.error(`❌ assignFieldingTask: fielder.userData is null/undefined for fielder:`, fielder);
+            return;
+        }
+        
+        if (!fielder.userData.description) {
+            console.error(`❌ assignFieldingTask: fielder.userData.description is null/undefined for fielder:`, fielder);
+            return;
+        }
+        
+        console.log(`📝 Assigning ${mode} task to ${fielder.userData.description}`);
+        
+        // Clear any existing task
+        this.clearCurrentTask();
+        
+        // Create new task
+        this.fieldingSystem.currentTask = {
+            fielder,
+            mode,
+            lastEval: timestamp,
+            startTime: timestamp
+        };
+        
+        // Set fielder state and start appropriate action
+        if (mode === 'catch') {
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'anticipating');
+            this.fieldingSystem.catchingSystem.catchInProgress = true;
+            this.fieldingSystem.catchingSystem.catchingFielder = fielder;
+            
+            // Start intercept
+            const intercept = this.calculateInterceptPoint(fielder, this.fieldingSystem.catchingSystem.anticipationTime);
+            this.startDirectIntercept(fielder, intercept.position);
+            
+        } else if (mode === 'ground') {
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'chasing');
+            this.fieldingSystem.chasingFielder = fielder;
+            this.startFielderChasing(fielder);
+        }
+    }
+
+    // ✅ NEW: Check if we should hand over task to a better fielder
+    shouldHandoverTask(newCandidate, currentTime) {
+        if (!this.fieldingSystem.currentTask) return false;
+        
+        const currentFielder = this.fieldingSystem.currentTask.fielder;
+        
+        // Check handover cooldown
+        if (currentTime - this.fieldingSystem.currentTask.startTime < this.fieldingSystem.HANDOVER_COOLDOWN_MS) {
+            return false;
+        }
+        
+        // Check if current fielder recently lost a handover
+        if (currentTime - currentFielder.userData.lastHandoverTime < this.fieldingSystem.HANDOVER_COOLDOWN_MS) {
+            return false;
+        }
+        
+        // Calculate ETA advantage
+        const landingPos = this.predictBallLanding();
+        if (!landingPos) return false;
+        
+        const currentETA = currentFielder.position.distanceTo(landingPos) / currentFielder.userData.topSpeed;
+        const newETA = newCandidate.eta;
+        
+        const advantage = currentETA - newETA;
+        
+        console.log(`🤔 Handover check: current ETA=${currentETA.toFixed(1)}s, new ETA=${newETA.toFixed(1)}s, advantage=${advantage.toFixed(1)}s`);
+        
+        return advantage > this.fieldingSystem.HANDOVER_MARGIN_SEC;
+    }
+
+    // ✅ NEW: Clear current fielding task
+    clearCurrentTask() {
+        if (!this.fieldingSystem.currentTask) return;
+        
+        // ✅ FIX: Clear fielder state properly
+        const currentFielder = this.fieldingSystem.currentTask.fielder;
+        if (currentFielder && currentFielder.userData && currentFielder.userData.description) {
+            console.log(`🔄 Clearing task for ${currentFielder.userData.description}`);
+            this.fieldingSystem.fielderStates.set(currentFielder.userData.description, 'idle');
+            
+            // Clear fielder-specific flags
+            currentFielder.userData.isRunningForAnticipation = false;
+            currentFielder.userData.chaseStartTime = null;
+            currentFielder.userData.interceptTarget = null;
+            currentFielder.userData.interceptStartTime = null;
+            currentFielder.userData.targetPosition = null;
+        }
+        
+        const fielder = this.fieldingSystem.currentTask.fielder;
+        
+        // Mark handover time
+        fielder.userData.lastHandoverTime = Date.now();
+        
+        // Reset fielder state
+        const currentState = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+        if (currentState !== 'idle') {
+            this.fieldingSystem.fielderStates.set(fielder.userData.description, 'idle');
+            console.log(`🔄 Clearing task: ${fielder.userData.description} -> idle`);
+        }
+        
+        // Clear task references
+        this.fieldingSystem.currentTask = null;
+        this.fieldingSystem.chasingFielder = null;
+        
+        if (this.fieldingSystem.catchingSystem.catchingFielder === fielder) {
+            this.fieldingSystem.catchingSystem.catchInProgress = false;
+            this.fieldingSystem.catchingSystem.catchingFielder = null;
+        }
+    }
+
+    // ✅ NEW: Assign nearest fielder to collect stationary ball
+    assignNearestFielderToStationaryBall() {
+        if (!this.cricketBall || !this.fielders || this.fielders.length === 0) {
+            console.log('❌ Cannot assign fielder - missing ball or fielders');
+            this.forceCompleteBall();
+            return;
+        }
+
+        // Find the nearest idle fielder to the ball
+        const ballPos = this.cricketBall.position.clone();
+        let nearestFielder = null;
+        let shortestDistance = Infinity;
+
+        this.fielders.forEach(fielder => {
+            if (!fielder.userData || !fielder.userData.description) return;
+            
+            const state = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+            if (state === 'idle') {
+                const distance = fielder.position.distanceTo(ballPos);
+                if (distance < shortestDistance) {
+                    shortestDistance = distance;
+                    nearestFielder = fielder;
+                }
+            }
+        });
+
+        if (!nearestFielder) {
+            console.log('❌ No idle fielders available - force completing ball');
+            this.forceCompleteBall();
+            return;
+        }
+
+        console.log(`🚶 ${nearestFielder.userData.description} collecting stationary ball (${shortestDistance.toFixed(1)}m away)`);
+        
+        // Clear any existing task and assign collection task
+        this.clearCurrentTask();
+        
+        // Create collection task
+        this.fieldingSystem.currentTask = {
+            fielder: nearestFielder,
+            mode: 'collect', // New mode for stationary ball collection
+            lastEval: Date.now(),
+            startTime: Date.now()
+        };
+        
+        // Set fielder state
+        this.fieldingSystem.fielderStates.set(nearestFielder.userData.description, 'chasing');
+        this.fieldingSystem.chasingFielder = nearestFielder;
+        
+        // Start the fielder moving to the ball
+        this.startFielderChasing(nearestFielder);
+        
+        // Mark ball as being collected
+        this.ballPhysics.isMoving = false; // Ensure ball stays stationary
     }
 
     // ✅ NEW: Determine shot zone based on ball velocity
@@ -3264,6 +3732,191 @@ class CricketGame {
             zoneFielders.includes(f.userData.description) &&
             this.fieldingSystem.fielderStates.get(f.userData.description) === 'idle'
         );
+    }
+
+    // ✅ NEW: Rebuild dynamic fielding metadata based on current positions
+    rebuildFieldingMeta() {
+        if (!this.fielders || this.fielders.length === 0) return;
+        
+        console.log('🔄 Rebuilding fielding metadata for dynamic positioning...');
+        
+        // Clear existing sector mapping
+        this.fieldingSystem.sectorMap.clear();
+        for (let i = 0; i < this.fieldingSystem.TOTAL_SECTORS; i++) {
+            this.fieldingSystem.sectorMap.set(i, []);
+        }
+        
+        const sectorArc = (2 * Math.PI) / this.fieldingSystem.TOTAL_SECTORS;
+        const strikerPos = { x: 0, z: 9 }; // Batsman's end
+        
+        this.fielders.forEach(fielder => {
+            if (!fielder.userData || !fielder.userData.description) return;
+            
+            // Calculate polar angle from striker's end
+            const dx = fielder.position.x - strikerPos.x;
+            const dz = fielder.position.z - strikerPos.z;
+            let angle = Math.atan2(dx, dz); // atan2 gives angle from positive Z axis
+            
+            // Normalize angle to 0-2π range
+            if (angle < 0) angle += 2 * Math.PI;
+            
+            // Calculate sector index (0-11)
+            const sector = Math.floor(angle / sectorArc);
+            fielder.userData.sector = sector;
+            
+            // Add to sector mapping
+            const sectorFielders = this.fieldingSystem.sectorMap.get(sector) || [];
+            sectorFielders.push(fielder);
+            this.fieldingSystem.sectorMap.set(sector, sectorFielders);
+            
+            console.log(`📍 ${fielder.userData.description}: sector ${sector} (angle: ${(angle * 180 / Math.PI).toFixed(1)}°)`);
+        });
+        
+        console.log('✅ Fielding metadata rebuilt with dynamic sectors');
+    }
+
+    // ✅ NEW: Debug overlay for hybrid fielding system
+    createFieldingDebugOverlay() {
+        if (document.getElementById('fieldingDebug')) {
+            return; // Already exists
+        }
+        
+        const overlay = document.createElement('div');
+        overlay.id = 'fieldingDebug';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 200px;
+            right: 20px;
+            width: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            padding: 10px;
+            border: 1px solid #444;
+            border-radius: 5px;
+            z-index: 200;
+            display: none;
+        `;
+        
+        overlay.innerHTML = `
+            <div style="font-weight: bold; margin-bottom: 10px;">🎯 HYBRID FIELDING DEBUG</div>
+            <div id="debugContent">Press 'F' to toggle</div>
+        `;
+        
+        document.body.appendChild(overlay);
+        
+        // Add keyboard toggle
+        document.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                const isVisible = overlay.style.display !== 'none';
+                overlay.style.display = isVisible ? 'none' : 'block';
+                
+                if (!isVisible) {
+                    this.updateFieldingDebugOverlay();
+                }
+            }
+        });
+        
+        console.log('🔧 Fielding debug overlay created - press F to toggle');
+        
+        // Log successful hybrid implementation
+        setTimeout(() => {
+            console.log('');
+            console.log('🎯 ========== HYBRID FIELDING SYSTEM v2.1 LOADED ==========');
+            console.log('✅ Two-pass selection: Aerial catch → Ground chase');
+            console.log('✅ Debounced selection (120ms) for stable trajectory');
+            console.log('✅ Periodic re-evaluation (250ms) with handover logic');
+            console.log('✅ Role-based priorities (keeper/bowler for close catches)');
+            console.log('✅ Directional filtering (slip/gully stay in position)');
+            console.log('✅ Dynamic position tracking and abort-catch detection');
+            console.log('🔧 Debug overlay: Press F in-game for real-time analysis');
+            console.log('======================================================');
+            console.log('');
+        }, 2000);
+    }
+
+    // ✅ NEW: Update debug overlay with current fielding state
+    updateFieldingDebugOverlay() {
+        const overlay = document.getElementById('fieldingDebug');
+        const content = document.getElementById('debugContent');
+        
+        if (!overlay || overlay.style.display === 'none' || !content) return;
+        
+        const ballPos = this.cricketBall ? this.cricketBall.position : { x: 0, y: 0, z: 0 };
+        const ballVel = this.ballPhysics ? this.ballPhysics.velocity : { x: 0, y: 0, z: 0, length: () => 0 };
+        const task = this.fieldingSystem.currentTask;
+        
+        let html = `
+            <div style="margin-bottom: 8px;">
+                <strong>Ball:</strong> (${ballPos.x.toFixed(1)}, ${ballPos.y.toFixed(1)}, ${ballPos.z.toFixed(1)})<br>
+                <strong>Velocity:</strong> ${ballVel.length().toFixed(1)} m/s<br>
+                <strong>Ball Hit:</strong> ${this.fieldingSystem.ballIsHit ? 'YES' : 'NO'}
+            </div>
+        `;
+        
+        if (task) {
+            html += `
+                <div style="border-top: 1px solid #444; padding-top: 8px; margin-bottom: 8px;">
+                    <strong>Current Task:</strong><br>
+                    Fielder: ${task.fielder.userData.description}<br>
+                    Mode: ${task.mode}<br>
+                    Age: ${((Date.now() - task.startTime) / 1000).toFixed(1)}s<br>
+                    Last Eval: ${((Date.now() - task.lastEval) / 1000).toFixed(1)}s ago
+                </div>
+            `;
+        } else {
+            html += `
+                <div style="border-top: 1px solid #444; padding-top: 8px; margin-bottom: 8px;">
+                    <strong>Current Task:</strong> None
+                </div>
+            `;
+        }
+        
+        // Show fielder candidates if ball is hit
+        if (this.fieldingSystem.ballIsHit) {
+            const landingPos = this.predictBallLanding();
+            
+            html += `<div style="border-top: 1px solid #444; padding-top: 8px;">`;
+            html += `<strong>Fielder Analysis:</strong><br>`;
+            
+            if (landingPos) {
+                html += `Landing: (${landingPos.x.toFixed(1)}, ${landingPos.z.toFixed(1)})<br>`;
+                
+                // Show shot direction
+                const shotDirection = this.determineShotDirection(ballVel, landingPos);
+                html += `Direction: ${shotDirection}<br><br>`;
+            }
+            
+            // Show top 5 fielders by ETA
+            const candidates = [];
+            this.fielders.forEach(fielder => {
+                const state = this.fieldingSystem.fielderStates.get(fielder.userData.description);
+                const dist = landingPos ? fielder.position.distanceTo(landingPos) : 
+                            fielder.position.distanceTo(ballPos);
+                const eta = dist / fielder.userData.topSpeed;
+                
+                candidates.push({
+                    name: fielder.userData.description,
+                    state,
+                    dist: dist.toFixed(1),
+                    eta: eta.toFixed(1),
+                    role: fielder.userData.role
+                });
+            });
+            
+            candidates.sort((a, b) => parseFloat(a.eta) - parseFloat(b.eta));
+            candidates.slice(0, 5).forEach((c, i) => {
+                const marker = task && task.fielder.userData.description === c.name ? '→ ' : '   ';
+                html += `${marker}${c.name}: ${c.eta}s (${c.state})<br>`;
+            });
+            
+            html += `</div>`;
+        }
+        
+        content.innerHTML = html;
     }
 
     calculateTimeToLand() {
@@ -3391,6 +4044,14 @@ class CricketGame {
     updateFieldingSystem(deltaTime) {
         if (!this.fieldingSystem.ballIsHit) return;
         
+        // ✅ NEW: Periodic re-evaluation for hybrid system
+        this.assignFielderIfNeeded();
+        
+        // ✅ NEW: Add abort-catch check for intercepting fielders
+        if (this.fieldingSystem.currentTask && this.fieldingSystem.currentTask.mode === 'catch') {
+            this.checkAbortCatch();
+        }
+        
         // Handle different fielder states
         this.fielders.forEach(fielder => {
             if (!fielder.userData || !fielder.userData.description) return;
@@ -3407,6 +4068,45 @@ class CricketGame {
                 this.updateFielderAnticipating(fielder, deltaTime);
             }
         });
+    }
+
+    // ✅ NEW: Check if we should abort aerial catch and switch to ground
+    checkAbortCatch() {
+        if (!this.fieldingSystem.currentTask || this.fieldingSystem.currentTask.mode !== 'catch') return;
+        
+        const ballPos = this.cricketBall.position;
+        const ballVel = this.ballPhysics.velocity;
+        const fielder = this.fieldingSystem.currentTask.fielder;
+        
+        // Check if ball has become too low or slow for aerial catch
+        const ballHeight = ballPos.y;
+        const ballSpeed = ballVel.length();
+        const verticalSpeed = Math.abs(ballVel.y);
+        
+        // Abort conditions
+        const tooLow = ballHeight < 1.0;
+        const tooSlow = ballSpeed < 2.0;
+        const notDescending = ballVel.y > -1.0 && ballHeight < 2.0; // Ball not dropping fast enough
+        
+        if (tooLow || tooSlow || notDescending) {
+            const distanceToBall = fielder.position.distanceTo(ballPos);
+            if (distanceToBall > 3.0) { // Only abort if not already very close
+                console.log(`🚫 Aborting aerial catch: height=${ballHeight.toFixed(1)}m, speed=${ballSpeed.toFixed(1)}m/s, vSpeed=${verticalSpeed.toFixed(1)}m/s`);
+                
+                // Convert to ground chase
+                this.fieldingSystem.currentTask.mode = 'ground';
+                this.fieldingSystem.fielderStates.set(fielder.userData.description, 'chasing');
+                this.fieldingSystem.catchingSystem.catchInProgress = false;
+                this.fieldingSystem.catchingSystem.catchingFielder = null;
+                this.fieldingSystem.chasingFielder = fielder;
+                
+                // Clear intercept data
+                fielder.userData.interceptTarget = null;
+                fielder.userData.interceptStartTime = null;
+                
+                console.log(`🔄 ${fielder.userData.description} switched from aerial catch to ground chase`);
+            }
+        }
     }
 
     updateFielderIntercepting(fielder, deltaTime) {
@@ -4264,6 +4964,11 @@ class CricketGame {
             }
         }
         
+        // ✅ NEW: Clear hybrid system task if it's a catch task
+        if (this.fieldingSystem.currentTask && this.fieldingSystem.currentTask.mode === 'catch') {
+            this.fieldingSystem.currentTask = null;
+        }
+        
         // Reset catching system
         catching.catchInProgress = false;
         catching.catchingFielder = null;
@@ -4273,12 +4978,16 @@ class CricketGame {
     }
 
     resetFieldingSystem() {
-        console.log('🔄 Resetting fielding system...');
+        console.log('🔄 Resetting hybrid fielding system...');
         
         // Reset fielding states
         this.fieldingSystem.ballIsHit = false;
         this.fieldingSystem.nearestFielder = null;
         this.fieldingSystem.chasingFielder = null;
+        
+        // ✅ NEW: Clear hybrid system state
+        this.fieldingSystem.currentTask = null;
+        this.fieldingSystem.nextSelectionTime = 0;
         
         // Return all fielders to their original positions and idle state
         this.fielders.forEach(fielder => {
@@ -4292,6 +5001,7 @@ class CricketGame {
                 fielder.userData.interceptTarget = null;
                 fielder.userData.interceptStartTime = null;
                 fielder.userData.targetPosition = null;
+                fielder.userData.lastHandoverTime = 0; // Clear handover time
                 
                 // Move fielder back to original position
                 const originalPos = this.fieldingSystem.fielderOriginalPositions.get(fielder.userData.description);
@@ -4305,7 +5015,7 @@ class CricketGame {
             }
         });
         
-        console.log('✅ Fielding system reset - all fielders back to original positions and idle');
+        console.log('✅ Hybrid fielding system reset - all fielders back to original positions and idle');
     }
 
     // Scoring methods
@@ -6908,6 +7618,9 @@ class CricketGame {
             // ✅ NEW: Initialize fielder positioning after team is loaded
             setTimeout(() => {
                 this.initializeFielderPositioning();
+                
+                // ✅ NEW: Build initial fielding metadata for hybrid system
+                this.rebuildFieldingMeta();
             }, 1000); // Small delay to ensure all positions are set
         }
     }
@@ -7123,7 +7836,12 @@ class CricketGame {
                 fieldingPosition: position.name,
                 description: position.description,
                 animationMixer: new THREE.AnimationMixer(character),
-                animations: new Map()
+                animations: new Map(),
+                // ✅ FIX: Ensure all fielders have required properties
+                role: 'fielder',
+                topSpeed: this.fieldingSystem.DEFAULT_TOP_SPEED,
+                sector: 0,
+                lastHandoverTime: 0
             };
             
             // Setup and play idle animation immediately
@@ -7186,6 +7904,41 @@ class CricketGame {
         if (rotationY !== null) {
             characterModel.rotation.y = rotationY;
         }
+        
+        // Initialize fielding attributes for hybrid system
+        if (!characterModel.userData) {
+            characterModel.userData = {};
+        }
+        
+        // Determine role and speed based on position
+        const distanceFromStumps = Math.sqrt(x * x + z * z);
+        let role = 'fielder';
+        let topSpeed = this.fieldingSystem.DEFAULT_TOP_SPEED;
+        
+        if (characterModel.userData.description) {
+            const desc = characterModel.userData.description.toLowerCase();
+            if (desc.includes('keeper')) {
+                role = 'keeper';
+                topSpeed = 7.5; // Keepers are quick but not the fastest
+            } else if (desc.includes('bowler')) {
+                role = 'bowler';
+                topSpeed = 8.5; // Bowlers are generally athletic
+            } else if (desc.includes('slip')) {
+                role = 'slip';
+                topSpeed = 8.2; // Slip fielders need quick reflexes
+            } else if (distanceFromStumps < 20) {
+                role = 'innerRing';
+                topSpeed = 9.0; // Inner ring fielders are usually faster
+            } else {
+                role = 'boundary';
+                topSpeed = 7.8; // Boundary fielders may be slower but have strong arms
+            }
+        }
+        
+        characterModel.userData.role = role;
+        characterModel.userData.topSpeed = topSpeed;
+        characterModel.userData.sector = 0; // Will be calculated in rebuildFieldingMeta
+        characterModel.userData.lastHandoverTime = 0;
         
         // Enable shadows and improve materials (same as main character)
         characterModel.traverse((child) => {
@@ -7821,6 +8574,12 @@ class CricketGame {
         // Update fielding system
         this.updateFieldingSystem(deltaTime);
         
+        // ✅ NEW: Update fielding debug overlay (throttled)
+        if (this.frameCount % 10 === 0) { // Update every 10 frames (~6 times per second)
+            this.updateFieldingDebugOverlay();
+        }
+        this.frameCount = (this.frameCount || 0) + 1;
+        
         // Update running system
         this.updateRunningSystem(deltaTime);
         
@@ -8358,6 +9117,9 @@ class CricketGame {
             
             // Update position indicators
             this.updatePositionIndicators();
+            
+            // ✅ NEW: Rebuild fielding metadata after position change
+            this.rebuildFieldingMeta();
             
             // Reset drag state
             this.fielderPositioning.selectedFielder = null;
@@ -9599,6 +10361,66 @@ document.addEventListener('DOMContentLoaded', () => {
             game.resetFieldingSystem();
             game.resetCatchingSystem();
             console.log('🔄 Fielding and catching systems reset');
+        };
+        
+        // ✅ NEW: Debug function to check fielding system health
+        window.debugFieldingHealth = () => {
+            console.log('🏥 FIELDING SYSTEM HEALTH CHECK:');
+            
+            // Check if all fielders have required userData
+            game.fielders.forEach(fielder => {
+                const hasUserData = !!fielder.userData;
+                const hasDescription = hasUserData && !!fielder.userData.description;
+                const hasTopSpeed = hasUserData && !!fielder.userData.topSpeed;
+                const hasRole = hasUserData && !!fielder.userData.role;
+                
+                const status = hasUserData && hasDescription && hasTopSpeed && hasRole ? '✅' : '❌';
+                console.log(`  ${status} ${hasDescription ? fielder.userData.description : 'Unknown'}: userData=${hasUserData}, topSpeed=${hasTopSpeed}, role=${hasRole}`);
+                
+                if (!hasTopSpeed && hasUserData) {
+                    console.log(`    🔧 Fixing topSpeed for ${fielder.userData.description}`);
+                    fielder.userData.topSpeed = game.fieldingSystem.DEFAULT_TOP_SPEED;
+                }
+            });
+            
+            // Check current task status
+            const task = game.fieldingSystem.currentTask;
+            if (task) {
+                console.log(`  📋 Current Task: ${task.fielder.userData.description} (${task.mode})`);
+            } else {
+                console.log('  📋 No active fielding task');
+            }
+            
+            // Check fielder states
+            const activeFielders = Array.from(game.fieldingSystem.fielderStates.entries())
+                .filter(([name, state]) => state !== 'idle');
+            
+            console.log(`  🏃 Active Fielders: ${activeFielders.length}`);
+            activeFielders.forEach(([name, state]) => {
+                console.log(`    - ${name}: ${state}`);
+            });
+            
+            console.log('✅ Fielding system health check complete');
+        };
+
+        // ✅ NEW: Test stationary ball collection
+        window.testStationaryBallCollection = () => {
+            console.log('🧪 Testing stationary ball collection...');
+            
+            if (!game.cricketBall) {
+                console.log('❌ No cricket ball found');
+                return;
+            }
+            
+            // Stop the ball and trigger collection
+            game.ballPhysics.isMoving = false;
+            game.ballPhysics.velocity.set(0, 0, 0);
+            game.cricketBall.position.set(15, 0.2, 5); // Place ball in field
+            
+            console.log('🎾 Ball placed at (15, 0.2, 5) and stopped');
+            console.log('🔄 Triggering stationary ball collection...');
+            
+            game.assignNearestFielderToStationaryBall();
         };
 
         // Expose catching system for testing
