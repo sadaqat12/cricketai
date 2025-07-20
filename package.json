@@ -1,0 +1,30 @@
+{
+  "name": "cricket3d",
+  "version": "1.0.0",
+  "description": "3D Cricket Game with Three.js",
+  "main": "cricket-game.js",
+  "scripts": {
+    "start": "node serve.js",
+    "serve": "node serve.js",
+    "dev": "node serve.js",
+    "build": "node build-for-itch.js",
+    "build:render": "node build-render.js"
+  },
+  "dependencies": {
+    "fly": "^4.6.16",
+    "socket.io-client": "^4.7.2"
+  },
+  "keywords": [
+    "cricket",
+    "3d",
+    "threejs",
+    "game",
+    "webgl"
+  ],
+  "author": "Cricket3D Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}
