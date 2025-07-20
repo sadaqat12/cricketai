@@ -459,6 +459,83 @@ body {
     text-shadow: 0 0 5px rgba(116, 144, 255, 0.8) !important;
 }
 
+/* Batting Controls */
+.batting-controls {
+    position: fixed;
+    top: 120px;
+    left: 20px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.batting-help {
+    background: linear-gradient(135deg, rgba(10, 10, 26, 0.95) 0%, rgba(20, 20, 40, 0.9) 100%) !important;
+    border: 2px solid rgba(116, 144, 255, 0.5) !important;
+    border-radius: 15px !important;
+    padding: 18px !important;
+    font-size: 12px !important;
+    backdrop-filter: blur(15px) !important;
+    box-shadow: 0 8px 25px rgba(116, 144, 255, 0.2) !important;
+    pointer-events: auto !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+
+.batting-help::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(116, 144, 255, 0.1), transparent);
+    transition: left 1s;
+}
+
+.batting-help:hover::before {
+    left: 100%;
+}
+
+.batting-help .help-title {
+    color: #4ecdc4 !important;
+    font-weight: bold !important;
+    margin-bottom: 10px !important;
+    font-size: 14px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.8px !important;
+    font-family: 'Rajdhani', sans-serif !important;
+    text-shadow: 0 0 8px rgba(78, 205, 196, 0.6) !important;
+}
+
+.batting-help .help-controls {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 6px !important;
+}
+
+.batting-help .help-controls span {
+    color: white !important;
+    opacity: 0.85 !important;
+    font-family: 'Orbitron', monospace !important;
+    font-size: 12px !important;
+    transition: all 0.3s ease !important;
+    padding: 3px 8px !important;
+    border-radius: 6px !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.batting-help .help-controls span:hover {
+    opacity: 1 !important;
+    color: #4ecdc4 !important;
+    background: rgba(78, 205, 196, 0.1) !important;
+    border-color: rgba(78, 205, 196, 0.3) !important;
+    transform: translateX(3px) !important;
+    text-shadow: 0 0 5px rgba(78, 205, 196, 0.8) !important;
+}
+
 /* Game Mode Selection */
 .menu-title {
     font-family: 'Orbitron', sans-serif;
@@ -973,4 +1050,231 @@ input[type="range"].setting-control {
     .guide-container {
         padding: 20px;
     }
+}
+
+/* Multiplayer Setup Styles */
+.player-setup {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    margin: 30px 0;
+    gap: 20px;
+}
+
+.player-input-section {
+    background: rgba(255, 255, 255, 0.05);
+    border: 2px solid rgba(116, 144, 255, 0.3);
+    border-radius: 15px;
+    padding: 25px;
+    text-align: center;
+    flex: 1;
+    max-width: 300px;
+}
+
+.player-icon {
+    font-size: 48px;
+    margin-bottom: 10px;
+}
+
+.player-name-input {
+    width: 100%;
+    padding: 12px 15px;
+    font-size: 18px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 2px solid rgba(116, 144, 255, 0.5);
+    border-radius: 8px;
+    color: white;
+    text-align: center;
+    margin-top: 10px;
+    transition: all 0.3s ease;
+}
+
+.player-name-input:focus {
+    outline: none;
+    border-color: rgba(116, 144, 255, 0.8);
+    background: rgba(0, 0, 0, 0.5);
+    box-shadow: 0 0 20px rgba(116, 144, 255, 0.3);
+}
+
+.vs-divider {
+    font-size: 36px;
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.8);
+    text-shadow: 0 0 20px rgba(116, 144, 255, 0.5);
+}
+
+.match-settings {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 10px;
+    padding: 20px;
+    margin: 20px 0;
+}
+
+.settings-info {
+    margin: 10px 0;
+    font-size: 16px;
+    color: rgba(255, 255, 255, 0.9);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.info-icon {
+    font-size: 20px;
+}
+
+/* Toss Screen Styles */
+.toss-container {
+    text-align: center;
+    padding: 30px 0;
+}
+
+.coin-container {
+    margin: 30px auto;
+    width: 120px;
+    height: 120px;
+    perspective: 1000px;
+}
+
+.coin {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    transform-style: preserve-3d;
+    transition: transform 0.6s;
+}
+
+.coin.spinning {
+    animation: coinFlip 2s ease-out;
+}
+
+.coin.heads {
+    transform: rotateY(0deg);
+}
+
+.coin.tails {
+    transform: rotateY(180deg);
+}
+
+@keyframes coinFlip {
+    0% { transform: rotateY(0deg) rotateX(0deg); }
+    100% { transform: rotateY(1800deg) rotateX(720deg); }
+}
+
+.coin-face {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    backface-visibility: hidden;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 48px;
+    font-weight: bold;
+    border: 4px solid rgba(255, 215, 0, 0.8);
+    box-shadow: 0 0 30px rgba(255, 215, 0, 0.5);
+}
+
+.coin-face.heads {
+    background: linear-gradient(135deg, #FFD700, #FFA500);
+    color: #333;
+}
+
+.coin-face.tails {
+    background: linear-gradient(135deg, #C0C0C0, #808080);
+    color: #222;
+    transform: rotateY(180deg);
+}
+
+.toss-selection h3 {
+    font-size: 24px;
+    margin-bottom: 20px;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.toss-buttons {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+}
+
+.toss-btn {
+    background: rgba(116, 144, 255, 0.2);
+    border: 2px solid rgba(116, 144, 255, 0.5);
+    color: white;
+    padding: 15px 30px;
+    border-radius: 10px;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.toss-btn:hover:not(:disabled) {
+    background: rgba(116, 144, 255, 0.4);
+    transform: translateY(-2px);
+    box-shadow: 0 5px 20px rgba(116, 144, 255, 0.4);
+}
+
+.toss-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.coin-icon {
+    font-size: 24px;
+}
+
+.toss-result {
+    margin-top: 30px;
+}
+
+.toss-result h3 {
+    font-size: 28px;
+    color: #FFD700;
+    text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+    margin-bottom: 20px;
+}
+
+.choice-buttons {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+.choice-btn {
+    background: linear-gradient(135deg, rgba(116, 144, 255, 0.3), rgba(116, 144, 255, 0.1));
+    border: 2px solid rgba(116, 144, 255, 0.6);
+    color: white;
+    padding: 20px 40px;
+    border-radius: 15px;
+    font-size: 20px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.choice-btn:hover {
+    background: linear-gradient(135deg, rgba(116, 144, 255, 0.5), rgba(116, 144, 255, 0.3));
+    transform: scale(1.05);
+    box-shadow: 0 10px 30px rgba(116, 144, 255, 0.5);
+}
+
+.primary-btn {
+    background: linear-gradient(135deg, rgba(116, 144, 255, 0.4), rgba(116, 144, 255, 0.2));
+    border: 2px solid rgba(116, 144, 255, 0.6);
+    font-size: 20px;
+    padding: 15px 40px;
+    margin-top: 20px;
+}
+
+.primary-btn:hover {
+    background: linear-gradient(135deg, rgba(116, 144, 255, 0.6), rgba(116, 144, 255, 0.4));
+    transform: scale(1.05);
 } 

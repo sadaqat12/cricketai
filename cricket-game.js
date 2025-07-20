@@ -199,6 +199,22 @@ class CricketGame {
             gameOverReason: null // 'target_achieved', 'overs_completed', 'all_out'
         };
 
+        // Multiplayer system
+        this.multiplayerSystem = {
+            isActive: false,
+            currentInnings: 1,
+            maxOvers: 3.0, // 3 overs per innings
+            maxBalls: 18, // 18 balls per innings
+            player1: null,
+            player2: null,
+            battingPlayer: null,
+            bowlingPlayer: null,
+            firstInningsScore: 0,
+            firstInningsWickets: 0,
+            gameStatus: 'playing', // 'playing', 'innings_break', 'match_over'
+            matchWinner: null
+        };
+
         // Ball state management
         this.ballState = {
             isActive: false,
@@ -518,6 +534,13 @@ class CricketGame {
                     window.pendingTargetChase = false;
                     console.log('🎯 Target chase mode activated after loading');
                 }, 500);
+            } else if (window.pendingMultiplayer && window.menuSystem) {
+                // Handle multiplayer mode initialization
+                setTimeout(() => {
+                    this.initializeMultiplayer();
+                    window.pendingMultiplayer = false;
+                    console.log('🏏 Multiplayer mode activated after loading');
+                }, 500);
             } else {
                 // Show bowling controls for free play mode
                 setTimeout(() => {
@@ -613,11 +636,22 @@ class CricketGame {
 
     // New methods for menu integration
     start() {
-        if (!this.isInitialized) {
+        console.log('🎮 Starting game...');
+        
+        // Check if we need to initialize or just resume
+        if (!this.isInitialized || !this.scene || !this.renderer) {
+            console.log('🔄 Initializing game...');
             this.init();
         } else {
-            // Resume if already initialized
-            this.resume();
+            console.log('▶️ Resuming existing game...');
+            // Just resume the existing game
+            this.isPaused = false;
+            this.clock.start();
+            
+            // Restart animation loop if needed
+            if (!this.animationId) {
+                this.animate();
+            }
         }
         
         // ✅ NEW: Restore game UI elements when starting
@@ -647,24 +681,103 @@ class CricketGame {
     }
 
     stop() {
+        console.log('🛑 Stopping game...');
+        
+        // Pause the game but don't mark as uninitialized yet
         this.isPaused = true;
         this.clock.stop();
         
-        // Cancel animation frame
+        // Cancel animation frame IMMEDIATELY
         if (this.animationId) {
             cancelAnimationFrame(this.animationId);
             this.animationId = null;
         }
         
-        // Reset game state
+        // Clear the renderer properly but keep it ready
+        if (this.renderer) {
+            // Set a black clear color to avoid blue screen
+            this.renderer.setClearColor(0x000000, 1);
+            this.renderer.clear();
+            // Render one black frame to ensure canvas is cleared
+            this.renderer.render(this.scene, this.camera);
+        }
+        
+        // Clear all timers
+        this.clearAIBowlerTimers();
+        
+        // Reset all game systems
         this.resetFieldingSystem();
         this.resetCatchingSystem();
         this.resetRunningSystem();
+        this.resetBallTracking();
+        
+        // Reset game modes
+        this.targetSystem.isActive = false;
+        this.multiplayerSystem.isActive = false;
+        
+        // Clear any pending flags
+        window.pendingTargetChase = false;
+        window.pendingMultiplayer = false;
+        
+        // Reset scores
+        this.cricketScore.runs = 0;
+        this.cricketScore.wickets = 0;
+        this.cricketScore.overs = 0;
+        this.cricketScore.balls = 0;
+        
+        // Reset ball state
+        this.ballState.isActive = false;
+        this.ballState.isComplete = false;
+        this.ballPhysics.isMoving = false;
+        
+        // Remove any game screens
+        if (this.gameOverScreen) {
+            this.gameOverScreen.remove();
+            this.gameOverScreen = null;
+        }
+        if (this.inningsBreakScreen) {
+            this.inningsBreakScreen.remove();
+            this.inningsBreakScreen = null;
+        }
+        if (this.multiplayerResultScreen) {
+            this.multiplayerResultScreen.remove();
+            this.multiplayerResultScreen = null;
+        }
+        
+        // Remove any notifications
+        this.removeBowlingCountdown();
+        const notifications = document.querySelectorAll('[id*="notification"], [id*="countdown"], [id*="multiplayerInfo"]');
+        notifications.forEach(notification => notification.remove());
+        
+        // Remove target display
+        const targetDisplay = document.getElementById('targetDisplay');
+        if (targetDisplay) {
+            targetDisplay.remove();
+        }
+        
+        // Remove any lingering UI elements
+        const gameUIElements = document.querySelectorAll('.game-over-screen, .target-notification, .ball-summary');
+        gameUIElements.forEach(element => element.remove());
+        
+        // Reset AI bowler
+        this.aiBowler.isEnabled = true; // Reset to default
+        this.aiBowler.isActive = false;
+        
+        // Hide bowling controls
+        if (window.menuSystem && window.menuSystem.hideBowlingControls) {
+            window.menuSystem.hideBowlingControls();
+        }
         
         // ✅ NEW: Clean up dynamic UI elements when stopping game
         this.cleanupGameUI();
         
-        console.log('🎮 Game stopped');
+        // Clear the scene (optional - keeps models loaded for faster restart)
+        // this.clearScene();
+        
+        // Keep the game initialized for faster restart
+        // Only the game state is reset, not the scene/renderer
+        
+        console.log('🎮 Game stopped and cleaned up');
     }
     
     // ✅ NEW: Clean up all dynamic game UI elements
@@ -933,12 +1046,15 @@ class CricketGame {
         
         this.renderer = new THREE.WebGLRenderer({ 
             canvas: canvas,
-            antialias: true 
+            antialias: true,
+            alpha: true 
         });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.setPixelRatio(window.devicePixelRatio);
+        // Set black background to prevent blue screen
+        this.renderer.setClearColor(0x000000, 1);
         
         console.log('Renderer created successfully');
         console.log('Renderer size:', this.renderer.getSize(new THREE.Vector2()));
@@ -4419,6 +4535,11 @@ class CricketGame {
             this.checkTargetChaseConditions();
         }
         
+        // Check multiplayer innings end conditions
+        if (this.multiplayerSystem.isActive) {
+            this.checkMultiplayerInningsEnd();
+        }
+        
         // ✅ NEW: Initialize AI Bowler for next ball (with 3-second delay)
         setTimeout(() => {
             this.initializeAIBowler();
@@ -5036,11 +5157,494 @@ class CricketGame {
         this.cricketScore.boundaryAwarded = false;
         this.cricketScore.ballHasBeenHit = false; // ✅ Reset hit flag for new ball
     }
+    
+    resetGame() {
+        // Reset scores
+        this.cricketScore.runs = 0;
+        this.cricketScore.wickets = 0;
+        this.cricketScore.overs = 0;
+        this.cricketScore.balls = 0;
+        
+        // Reset ball tracking
+        this.resetBallTracking();
+        
+        // Reset ball state
+        this.ballState.isActive = false;
+        this.ballState.isComplete = false;
+        this.ballState.runsThisBall = 0;
+        
+        // Reset target system
+        this.targetSystem.isActive = false;
+        this.targetSystem.gameStatus = 'playing';
+        
+        // Reset multiplayer system
+        this.multiplayerSystem.currentInnings = 1;
+        this.multiplayerSystem.firstInningsScore = 0;
+        this.multiplayerSystem.firstInningsWickets = 0;
+        this.multiplayerSystem.gameStatus = 'playing';
+        this.multiplayerSystem.matchWinner = null;
+        
+        // Clear any AI bowler timers
+        this.clearAIBowlerTimers();
+        
+        // Update displays
+        this.updateCricketScore();
+        
+        console.log('🔄 Game reset complete');
+    }
+
+    // Multiplayer System Methods
+    initializeMultiplayer() {
+        if (!window.menuSystem || !window.menuSystem.gameState.multiplayerData) {
+            console.error('❌ Multiplayer data not found!');
+            return;
+        }
+
+        const multiplayerData = window.menuSystem.gameState.multiplayerData;
+        
+        // Disable AI Bowler for multiplayer
+        this.disableAIBowler();
+        
+        // Hide AI Bowler toggle button
+        const aiBowlerToggle = document.getElementById('aiBowlerToggleBtn');
+        if (aiBowlerToggle) {
+            aiBowlerToggle.style.display = 'none';
+        }
+        
+        // Show manual bowling help permanently
+        const manualBowlingHelp = document.getElementById('manualBowlingHelp');
+        if (manualBowlingHelp) {
+            manualBowlingHelp.style.display = 'block';
+        }
+        
+        // Set up multiplayer system
+        this.multiplayerSystem.isActive = true;
+        this.multiplayerSystem.player1 = multiplayerData.player1;
+        this.multiplayerSystem.player2 = multiplayerData.player2;
+        
+        // Determine batting order based on toss
+        if (multiplayerData.battingFirst === 'player1') {
+            this.multiplayerSystem.battingPlayer = multiplayerData.player1;
+            this.multiplayerSystem.bowlingPlayer = multiplayerData.player2;
+        } else {
+            this.multiplayerSystem.battingPlayer = multiplayerData.player2;
+            this.multiplayerSystem.bowlingPlayer = multiplayerData.player1;
+        }
+        
+        // Reset scores
+        this.cricketScore.runs = 0;
+        this.cricketScore.wickets = 0;
+        this.cricketScore.overs = 0;
+        this.cricketScore.balls = 0;
+        
+        console.log(`🏏 MULTIPLAYER MATCH STARTED!`);
+        console.log(`🏏 ${this.multiplayerSystem.battingPlayer.name} is batting`);
+        console.log(`🎳 ${this.multiplayerSystem.bowlingPlayer.name} is bowling`);
+        console.log(`📋 First innings: 3 overs`);
+        
+        this.showMultiplayerStartNotification();
+        this.updateMultiplayerHUD();
+        this.updateCricketScore();
+    }
+    
+    showMultiplayerStartNotification() {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 40px;
+            border-radius: 20px;
+            border: 3px solid #7490ff;
+            text-align: center;
+            z-index: 10000;
+            font-family: Arial, sans-serif;
+            box-shadow: 0 0 50px rgba(116, 144, 255, 0.5);
+        `;
+        
+        notification.innerHTML = `
+            <h1 style="margin: 0 0 20px 0; font-size: 36px; color: #FFD700;">
+                FIRST INNINGS
+            </h1>
+            <div style="font-size: 24px; margin: 10px 0;">
+                <span style="color: #4ecdc4;">🏏 Batting:</span> ${this.multiplayerSystem.battingPlayer.name}
+            </div>
+            <div style="font-size: 24px; margin: 10px 0;">
+                <span style="color: #ff6b6b;">🎳 Bowling:</span> ${this.multiplayerSystem.bowlingPlayer.name}
+            </div>
+            <p style="margin: 20px 0 0 0; font-size: 18px; opacity: 0.8;">
+                3 overs to set a target!
+            </p>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        setTimeout(() => {
+            notification.remove();
+        }, 4000);
+    }
+    
+    updateMultiplayerHUD() {
+        // Update the score display to show player names
+        const scoreDisplay = document.querySelector('.score-display');
+        if (scoreDisplay && this.multiplayerSystem.isActive) {
+            // Add player info above score
+            let playerInfo = document.getElementById('multiplayerInfo');
+            if (!playerInfo) {
+                playerInfo = document.createElement('div');
+                playerInfo.id = 'multiplayerInfo';
+                playerInfo.style.cssText = `
+                    background: rgba(0, 0, 0, 0.3);
+                    padding: 10px 20px;
+                    border-radius: 10px 10px 0 0;
+                    border: 2px solid rgba(116, 144, 255, 0.3);
+                    border-bottom: none;
+                    font-size: 16px;
+                    margin-bottom: -2px;
+                `;
+                scoreDisplay.parentNode.insertBefore(playerInfo, scoreDisplay);
+            }
+            
+            playerInfo.innerHTML = `
+                <div style="display: flex; justify-content: space-between; gap: 20px;">
+                    <span>🏏 ${this.multiplayerSystem.battingPlayer.name}</span>
+                    <span style="color: #FFD700;">Innings ${this.multiplayerSystem.currentInnings}/2</span>
+                    <span>🎳 ${this.multiplayerSystem.bowlingPlayer.name}</span>
+                </div>
+            `;
+        }
+    }
+    
+    checkMultiplayerInningsEnd() {
+        if (!this.multiplayerSystem.isActive) return;
+        
+        // Calculate actual decimal overs (not display format)
+        const completedOvers = Math.floor(this.cricketScore.balls / 6);
+        const ballsInCurrentOver = this.cricketScore.balls % 6;
+        const actualOvers = completedOvers + (ballsInCurrentOver / 6);
+        
+        // Check if first innings is complete
+        if (this.multiplayerSystem.currentInnings === 1) {
+            if (actualOvers >= this.multiplayerSystem.maxOvers || this.cricketScore.wickets >= 10) {
+                this.endFirstInnings();
+            }
+        } else {
+            // Second innings - check for win/loss conditions
+            if (this.cricketScore.runs > this.multiplayerSystem.firstInningsScore) {
+                // Batting team won
+                this.endMultiplayerMatch('batting_won');
+            } else if (actualOvers >= this.multiplayerSystem.maxOvers || this.cricketScore.wickets >= 10) {
+                // Bowling team won
+                this.endMultiplayerMatch('bowling_won');
+            }
+        }
+    }
+    
+    endFirstInnings() {
+        this.multiplayerSystem.firstInningsScore = this.cricketScore.runs;
+        this.multiplayerSystem.firstInningsWickets = this.cricketScore.wickets;
+        this.multiplayerSystem.gameStatus = 'innings_break';
+        
+        console.log(`🏏 FIRST INNINGS COMPLETE!`);
+        console.log(`📊 ${this.multiplayerSystem.battingPlayer.name} scored ${this.cricketScore.runs}/${this.cricketScore.wickets}`);
+        
+        this.showInningsBreakScreen();
+    }
+    
+    showInningsBreakScreen() {
+        const inningsBreak = document.createElement('div');
+        inningsBreak.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        `;
+        
+        inningsBreak.innerHTML = `
+            <div style="
+                background: rgba(0, 0, 0, 0.9);
+                padding: 50px;
+                border-radius: 20px;
+                border: 3px solid #7490ff;
+                text-align: center;
+                max-width: 600px;
+                box-shadow: 0 0 50px rgba(116, 144, 255, 0.5);
+            ">
+                <h1 style="margin: 0 0 30px 0; font-size: 36px; color: #FFD700;">
+                    INNINGS BREAK
+                </h1>
+                <div style="font-size: 28px; margin: 20px 0;">
+                    ${this.multiplayerSystem.battingPlayer.name} scored
+                </div>
+                <div style="font-size: 48px; margin: 20px 0; color: #4ecdc4;">
+                    ${this.cricketScore.runs}/${this.cricketScore.wickets}
+                </div>
+                <div style="font-size: 20px; margin: 10px 0; opacity: 0.8;">
+                    in ${this.cricketScore.overs}.${this.cricketScore.balls} overs
+                </div>
+                <hr style="margin: 30px 0; border: 1px solid rgba(255, 255, 255, 0.2);">
+                <div style="font-size: 24px; margin: 20px 0;">
+                    ${this.multiplayerSystem.bowlingPlayer.name} needs
+                </div>
+                <div style="font-size: 36px; margin: 20px 0; color: #ff6b6b;">
+                    ${this.cricketScore.runs + 1} runs to win
+                </div>
+                <button onclick="window.cricketGame.startSecondInnings()" style="
+                    background: rgba(116, 144, 255, 0.9);
+                    border: 2px solid rgba(116, 144, 255, 1);
+                    color: white;
+                    padding: 15px 40px;
+                    border-radius: 10px;
+                    font-size: 20px;
+                    cursor: pointer;
+                    margin-top: 20px;
+                    transition: all 0.3s ease;
+                " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                    Start Second Innings
+                </button>
+            </div>
+        `;
+        
+        document.body.appendChild(inningsBreak);
+        this.inningsBreakScreen = inningsBreak;
+    }
+    
+    startSecondInnings() {
+        // Remove innings break screen
+        if (this.inningsBreakScreen) {
+            this.inningsBreakScreen.remove();
+            this.inningsBreakScreen = null;
+        }
+        
+        // Swap batting and bowling players
+        const temp = this.multiplayerSystem.battingPlayer;
+        this.multiplayerSystem.battingPlayer = this.multiplayerSystem.bowlingPlayer;
+        this.multiplayerSystem.bowlingPlayer = temp;
+        
+        // Reset scores for second innings
+        this.cricketScore.runs = 0;
+        this.cricketScore.wickets = 0;
+        this.cricketScore.overs = 0;
+        this.cricketScore.balls = 0;
+        
+        // Update innings
+        this.multiplayerSystem.currentInnings = 2;
+        this.multiplayerSystem.gameStatus = 'playing';
+        
+        // Activate target chase mode for second innings
+        this.targetSystem.isActive = true;
+        this.targetSystem.targetRuns = this.multiplayerSystem.firstInningsScore + 1;
+        this.targetSystem.maxOvers = this.multiplayerSystem.maxOvers;
+        this.targetSystem.maxBalls = this.multiplayerSystem.maxBalls;
+        this.targetSystem.runsNeeded = this.targetSystem.targetRuns;
+        this.targetSystem.ballsRemaining = this.targetSystem.maxBalls;
+        this.targetSystem.oversRemaining = this.multiplayerSystem.maxOvers;
+        this.targetSystem.requiredRunRate = this.calculateRequiredRunRate();
+        this.targetSystem.gameStatus = 'playing';
+        
+        console.log(`🏏 SECOND INNINGS STARTED!`);
+        console.log(`🎯 ${this.multiplayerSystem.battingPlayer.name} needs ${this.targetSystem.targetRuns} runs to win`);
+        
+        this.showSecondInningsNotification();
+        this.updateMultiplayerHUD();
+        this.updateCricketScore();
+    }
+    
+    showSecondInningsNotification() {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 40px;
+            border-radius: 20px;
+            border: 3px solid #7490ff;
+            text-align: center;
+            z-index: 10000;
+            font-family: Arial, sans-serif;
+            box-shadow: 0 0 50px rgba(116, 144, 255, 0.5);
+        `;
+        
+        notification.innerHTML = `
+            <h1 style="margin: 0 0 20px 0; font-size: 36px; color: #FFD700;">
+                SECOND INNINGS
+            </h1>
+            <div style="font-size: 28px; margin: 20px 0; color: #ff6b6b;">
+                Target: ${this.targetSystem.targetRuns} runs
+            </div>
+            <div style="font-size: 20px; margin: 10px 0;">
+                <span style="color: #4ecdc4;">🏏 Batting:</span> ${this.multiplayerSystem.battingPlayer.name}
+            </div>
+            <div style="font-size: 20px; margin: 10px 0;">
+                <span style="color: #ff6b6b;">🎳 Bowling:</span> ${this.multiplayerSystem.bowlingPlayer.name}
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        setTimeout(() => {
+            notification.remove();
+        }, 4000);
+    }
+    
+    endMultiplayerMatch(result) {
+        this.multiplayerSystem.gameStatus = 'match_over';
+        
+        let winner, margin;
+        if (result === 'batting_won') {
+            winner = this.multiplayerSystem.battingPlayer.name;
+            const wicketsLeft = 10 - this.cricketScore.wickets;
+            const ballsLeft = this.targetSystem.ballsRemaining;
+            margin = `${wicketsLeft} wickets (${ballsLeft} balls remaining)`;
+        } else {
+            winner = this.multiplayerSystem.bowlingPlayer.name;
+            const runsDiff = this.targetSystem.targetRuns - this.cricketScore.runs - 1;
+            margin = `${runsDiff} runs`;
+        }
+        
+        this.multiplayerSystem.matchWinner = winner;
+        
+        console.log(`🏆 MATCH OVER! ${winner} won by ${margin}`);
+        
+        this.showMultiplayerResultScreen(winner, margin);
+    }
+    
+    showMultiplayerResultScreen(winner, margin) {
+        const resultScreen = document.createElement('div');
+        resultScreen.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        `;
+        
+        resultScreen.innerHTML = `
+            <div style="
+                background: rgba(0, 0, 0, 0.9);
+                padding: 50px;
+                border-radius: 20px;
+                border: 3px solid #FFD700;
+                text-align: center;
+                max-width: 700px;
+                box-shadow: 0 0 50px rgba(255, 215, 0, 0.5);
+            ">
+                <h1 style="margin: 0 0 30px 0; font-size: 48px; color: #FFD700;">
+                    🏆 MATCH OVER! 🏆
+                </h1>
+                <div style="font-size: 36px; margin: 20px 0; color: #4ecdc4;">
+                    ${winner} WINS!
+                </div>
+                <div style="font-size: 24px; margin: 20px 0; opacity: 0.8;">
+                    by ${margin}
+                </div>
+                <hr style="margin: 30px 0; border: 1px solid rgba(255, 255, 255, 0.2);">
+                <div style="display: flex; justify-content: space-around; margin: 30px 0;">
+                    <div>
+                        <h3 style="color: #7490ff; margin-bottom: 10px;">First Innings</h3>
+                        <div style="font-size: 20px;">${this.multiplayerSystem.player1.name}</div>
+                        <div style="font-size: 28px; color: #4ecdc4; margin-top: 5px;">
+                            ${this.multiplayerSystem.firstInningsScore}/${this.multiplayerSystem.firstInningsWickets}
+                        </div>
+                    </div>
+                    <div>
+                        <h3 style="color: #7490ff; margin-bottom: 10px;">Second Innings</h3>
+                        <div style="font-size: 20px;">${this.multiplayerSystem.player2.name}</div>
+                        <div style="font-size: 28px; color: #ff6b6b; margin-top: 5px;">
+                            ${this.cricketScore.runs}/${this.cricketScore.wickets}
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top: 30px;">
+                    <button onclick="window.cricketGame.rematchMultiplayer()" style="
+                        background: rgba(116, 144, 255, 0.9);
+                        border: 2px solid rgba(116, 144, 255, 1);
+                        color: white;
+                        padding: 15px 30px;
+                        border-radius: 10px;
+                        font-size: 18px;
+                        cursor: pointer;
+                        margin: 0 10px;
+                        transition: all 0.3s ease;
+                    " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                        Rematch
+                    </button>
+                    <button onclick="window.location.reload()" style="
+                        background: rgba(255, 107, 107, 0.9);
+                        border: 2px solid rgba(255, 107, 107, 1);
+                        color: white;
+                        padding: 15px 30px;
+                        border-radius: 10px;
+                        font-size: 18px;
+                        cursor: pointer;
+                        margin: 0 10px;
+                        transition: all 0.3s ease;
+                    " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                        Main Menu
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(resultScreen);
+        this.multiplayerResultScreen = resultScreen;
+    }
+    
+    rematchMultiplayer() {
+        // Remove result screen
+        if (this.multiplayerResultScreen) {
+            this.multiplayerResultScreen.remove();
+            this.multiplayerResultScreen = null;
+        }
+        
+        // Reset multiplayer system but keep player names
+        const player1 = this.multiplayerSystem.player1;
+        const player2 = this.multiplayerSystem.player2;
+        
+        // Reset all game state
+        this.resetGame();
+        
+        // Swap who bats first
+        if (window.menuSystem.gameState.multiplayerData.battingFirst === 'player1') {
+            window.menuSystem.gameState.multiplayerData.battingFirst = 'player2';
+        } else {
+            window.menuSystem.gameState.multiplayerData.battingFirst = 'player1';
+        }
+        
+        // Reinitialize multiplayer
+        setTimeout(() => {
+            this.initializeMultiplayer();
+        }, 500);
+    }
 
     // ✅ NEW: AI Bowler System Methods
     
     // Initialize AI Bowler after ball completion
     initializeAIBowler() {
+        // Check if in multiplayer mode - always manual bowling
+        if (this.multiplayerSystem.isActive) {
+            console.log('🏏 Multiplayer mode - Manual bowling only');
+            console.log(`📋 ${this.multiplayerSystem.bowlingPlayer.name}, use digit keys 6-0 to bowl`);
+            return;
+        }
+        
         if (!this.aiBowler.isEnabled) {
             console.log('🤖 AI Bowler is disabled - Manual bowling mode active');
             console.log('📋 Use digit keys 6-0 to bowl manually');
@@ -5235,8 +5839,8 @@ class CricketGame {
         countdownDiv.style.cssText = `
             position: fixed;
             top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            left: 20px;
+            transform: translateY(-50%);
             z-index: 10000;
             background: rgba(20, 20, 40, 0.95);
             border: 3px solid rgba(116, 144, 255, 0.6);
@@ -5247,6 +5851,7 @@ class CricketGame {
             box-shadow: 0 0 40px rgba(116, 144, 255, 0.4);
             backdrop-filter: blur(10px);
             animation: countdownPulse 1s ease-in-out infinite;
+            min-width: 250px;
         `;
         
         // Add CSS animation
@@ -5255,8 +5860,8 @@ class CricketGame {
             style.id = 'countdownStyles';
             style.textContent = `
                 @keyframes countdownPulse {
-                    0%, 100% { transform: translate(-50%, -50%) scale(1); }
-                    50% { transform: translate(-50%, -50%) scale(1.05); }
+                    0%, 100% { transform: scale(1); }
+                    50% { transform: scale(1.05); }
                 }
                 @keyframes countdownNumber {
                     0% { transform: scale(0.5); opacity: 0; }
@@ -5343,8 +5948,9 @@ class CricketGame {
         const notification = document.createElement('div');
         notification.style.cssText = `
             position: fixed;
-            top: 20px;
-            right: 20px;
+            top: 50%;
+            left: 20px;
+            transform: translateY(-50%);
             z-index: 9999;
             background: rgba(20, 20, 40, 0.95);
             border: 2px solid rgba(116, 144, 255, 0.5);
@@ -5354,7 +5960,8 @@ class CricketGame {
             font-family: 'Rajdhani', sans-serif;
             box-shadow: 0 0 20px rgba(116, 144, 255, 0.3);
             backdrop-filter: blur(10px);
-            animation: slideInRight 0.5s ease-out;
+            animation: slideInLeft 0.5s ease-out;
+            min-width: 250px;
         `;
         
         notification.innerHTML = `
@@ -5377,8 +5984,8 @@ class CricketGame {
             const style = document.createElement('style');
             style.id = 'bowlingNotificationStyles';
             style.textContent = `
-                @keyframes slideInRight {
-                    from { transform: translateX(100%); opacity: 0; }
+                @keyframes slideInLeft {
+                    from { transform: translateX(-100%); opacity: 0; }
                     to { transform: translateX(0); opacity: 1; }
                 }
             `;
@@ -5646,8 +6253,9 @@ class CricketGame {
         const notification = document.createElement('div');
         notification.style.cssText = `
             position: fixed;
-            top: 20px;
-            right: 20px;
+            top: 50%;
+            left: 20px;
+            transform: translateY(-50%);
             z-index: 9999;
             background: rgba(20, 20, 40, 0.95);
             border: 2px solid rgba(255, 107, 107, 0.5);
@@ -5657,7 +6265,8 @@ class CricketGame {
             font-family: 'Rajdhani', sans-serif;
             box-shadow: 0 0 20px rgba(255, 107, 107, 0.3);
             backdrop-filter: blur(10px);
-            animation: slideInRight 0.5s ease-out;
+            animation: slideInLeft 0.5s ease-out;
+            min-width: 250px;
         `;
         
         notification.innerHTML = `
@@ -5680,7 +6289,7 @@ class CricketGame {
         // Remove after 4 seconds
         setTimeout(() => {
             if (notification.parentNode) {
-                notification.style.animation = 'slideInRight 0.5s ease-out reverse';
+                notification.style.animation = 'slideInLeft 0.5s ease-out reverse';
                 setTimeout(() => notification.remove(), 500);
             }
         }, 4000);
@@ -7062,8 +7671,14 @@ class CricketGame {
     animate() {
         this.animationId = requestAnimationFrame(() => this.animate());
         
-        // Don't update if paused
-        if (this.isPaused) return;
+        // Don't render if paused or not initialized
+        if (this.isPaused || !this.isInitialized) return;
+        
+        // Safety check for renderer
+        if (!this.renderer || !this.scene || !this.camera) {
+            console.warn('⚠️ Renderer, scene or camera missing in animate loop');
+            return;
+        }
         
         // Get delta time for smooth animations
         const deltaTime = this.clock.getDelta();

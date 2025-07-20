@@ -141,8 +141,224 @@ function startTargetChaseMode() {
 }
 
 function showMultiplayerOptions() {
-    // Placeholder for multiplayer functionality
-    alert('Multiplayer mode coming soon! Stay tuned for online cricket matches.');
+    // Show multiplayer setup screen
+    hideAllMenus();
+    showMultiplayerSetup();
+}
+
+// Multiplayer Setup Functions
+function showMultiplayerSetup() {
+    // Create multiplayer setup screen if it doesn't exist
+    let multiplayerSetup = document.getElementById('multiplayerSetup');
+    
+    if (!multiplayerSetup) {
+        multiplayerSetup = document.createElement('div');
+        multiplayerSetup.id = 'multiplayerSetup';
+        multiplayerSetup.className = 'menu-screen';
+        multiplayerSetup.innerHTML = `
+            <div class="menu-container">
+                <h2 class="menu-title">Local Multiplayer</h2>
+                
+                <div class="player-setup">
+                    <div class="player-input-section">
+                        <div class="player-icon">🏏</div>
+                        <h3>Player 1</h3>
+                        <input type="text" id="player1Name" class="player-name-input" 
+                               placeholder="Enter name" maxlength="20" 
+                               value="Player 1">
+                    </div>
+                    
+                    <div class="vs-divider">VS</div>
+                    
+                    <div class="player-input-section">
+                        <div class="player-icon">🏏</div>
+                        <h3>Player 2</h3>
+                        <input type="text" id="player2Name" class="player-name-input" 
+                               placeholder="Enter name" maxlength="20" 
+                               value="Player 2">
+                    </div>
+                </div>
+                
+                <div class="match-settings">
+                    <p class="settings-info">
+                        <span class="info-icon">📋</span> Match Format: 3 overs per innings
+                    </p>
+                    <p class="settings-info">
+                        <span class="info-icon">🎯</span> Second innings: Chase the target
+                    </p>
+                    <p class="settings-info">
+                        <span class="info-icon">🎳</span> Bowling: Manual control only
+                    </p>
+                </div>
+                
+                <button class="menu-btn primary-btn" onclick="proceedToToss()">
+                    <span class="btn-icon">🪙</span> Proceed to Toss
+                </button>
+                
+                <button class="menu-btn back-btn" onclick="showGameModes()">
+                    <span class="btn-icon">←</span> Back
+                </button>
+            </div>
+        `;
+        document.body.appendChild(multiplayerSetup);
+    }
+    
+    multiplayerSetup.classList.add('active');
+    gameState.currentMenu = 'multiplayerSetup';
+    
+    // Focus on first input
+    setTimeout(() => {
+        document.getElementById('player1Name').focus();
+    }, 100);
+}
+
+function proceedToToss() {
+    // Get player names
+    const player1Name = document.getElementById('player1Name').value.trim() || 'Player 1';
+    const player2Name = document.getElementById('player2Name').value.trim() || 'Player 2';
+    
+    // Store player names
+    gameState.multiplayerData = {
+        player1: { name: player1Name, runs: 0, wickets: 0 },
+        player2: { name: player2Name, runs: 0, wickets: 0 },
+        currentInnings: 1,
+        firstInningsScore: 0,
+        tossWinner: null,
+        battingFirst: null
+    };
+    
+    // Show toss screen
+    showTossScreen();
+}
+
+function showTossScreen() {
+    hideAllMenus();
+    
+    let tossScreen = document.getElementById('tossScreen');
+    
+    if (!tossScreen) {
+        tossScreen = document.createElement('div');
+        tossScreen.id = 'tossScreen';
+        tossScreen.className = 'menu-screen';
+        tossScreen.innerHTML = `
+            <div class="menu-container">
+                <h2 class="menu-title">Coin Toss</h2>
+                
+                <div class="toss-container">
+                    <div class="coin-container">
+                        <div class="coin" id="tossCoin">
+                            <div class="coin-face heads">H</div>
+                            <div class="coin-face tails">T</div>
+                        </div>
+                    </div>
+                    
+                    <div class="toss-selection">
+                        <h3>${gameState.multiplayerData.player1.name}, choose:</h3>
+                        <div class="toss-buttons">
+                            <button class="toss-btn" onclick="performToss('heads')">
+                                <span class="coin-icon">🪙</span> Heads
+                            </button>
+                            <button class="toss-btn" onclick="performToss('tails')">
+                                <span class="coin-icon">🪙</span> Tails
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="toss-result" id="tossResult" style="display: none;">
+                        <h3 id="tossResultText"></h3>
+                        <div class="choice-buttons" id="tossChoice" style="display: none;">
+                            <button class="choice-btn" onclick="chooseToBat()">
+                                <span class="btn-icon">🏏</span> Bat First
+                            </button>
+                            <button class="choice-btn" onclick="chooseToBowl()">
+                                <span class="btn-icon">🎳</span> Bowl First
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <button class="menu-btn back-btn" onclick="showMultiplayerSetup()">
+                    <span class="btn-icon">←</span> Back
+                </button>
+            </div>
+        `;
+        document.body.appendChild(tossScreen);
+    }
+    
+    tossScreen.classList.add('active');
+    gameState.currentMenu = 'tossScreen';
+}
+
+function performToss(choice) {
+    const coin = document.getElementById('tossCoin');
+    const tossButtons = document.querySelectorAll('.toss-btn');
+    const tossResult = document.getElementById('tossResult');
+    const tossResultText = document.getElementById('tossResultText');
+    
+    // Disable buttons during animation
+    tossButtons.forEach(btn => btn.disabled = true);
+    
+    // Add spinning animation
+    coin.classList.add('spinning');
+    
+    // Determine result
+    const result = Math.random() < 0.5 ? 'heads' : 'tails';
+    const player1Won = (choice === result);
+    
+    // After animation, show result
+    setTimeout(() => {
+        coin.classList.remove('spinning');
+        coin.classList.add(result);
+        
+        // Update game state
+        gameState.multiplayerData.tossWinner = player1Won ? 
+            gameState.multiplayerData.player1.name : 
+            gameState.multiplayerData.player2.name;
+        
+        // Show result
+        tossResult.style.display = 'block';
+        tossResultText.textContent = `${result.toUpperCase()}! ${gameState.multiplayerData.tossWinner} won the toss!`;
+        
+        // Show choice buttons after a short delay
+        setTimeout(() => {
+            document.getElementById('tossChoice').style.display = 'flex';
+        }, 1000);
+    }, 2000);
+}
+
+function chooseToBat() {
+    const winner = gameState.multiplayerData.tossWinner;
+    const player1Name = gameState.multiplayerData.player1.name;
+    
+    gameState.multiplayerData.battingFirst = (winner === player1Name) ? 'player1' : 'player2';
+    startMultiplayerGame();
+}
+
+function chooseToBowl() {
+    const winner = gameState.multiplayerData.tossWinner;
+    const player1Name = gameState.multiplayerData.player1.name;
+    
+    gameState.multiplayerData.battingFirst = (winner === player1Name) ? 'player2' : 'player1';
+    startMultiplayerGame();
+}
+
+function startMultiplayerGame() {
+    gameState.gameMode = 'multiplayer';
+    showLoadingScreen();
+    
+    // Hide menus and show game
+    hideAllMenus();
+    document.getElementById('gameContainer').style.display = 'block';
+    
+    // Initialize the game
+    if (window.startCricketGame) {
+        window.startCricketGame();
+    }
+    
+    // Set pending multiplayer flag
+    window.pendingMultiplayer = true;
+    
+    gameState.isPlaying = true;
 }
 
 // In-Game Functions
@@ -206,6 +422,12 @@ function quitToMenu() {
     if (confirm('Are you sure you want to quit to the main menu? Your progress will be lost.')) {
         gameState.isPlaying = false;
         gameState.isPaused = false;
+        gameState.gameMode = null;
+        
+        // Reset multiplayer data if exists
+        if (gameState.multiplayerData) {
+            gameState.multiplayerData = null;
+        }
         
         // Stop game
         if (window.stopCricketGame) {
@@ -215,6 +437,18 @@ function quitToMenu() {
         // Hide game and show main menu
         document.getElementById('gameContainer').style.display = 'none';
         document.getElementById('pauseMenu').style.display = 'none';
+        
+        // Hide loading screen if it's stuck
+        hideLoadingScreen();
+        
+        // Remove any lingering UI elements
+        const gameScreens = document.querySelectorAll('[id*="multiplayerSetup"], [id*="tossScreen"]');
+        gameScreens.forEach(screen => {
+            if (screen && screen.classList.contains('active')) {
+                screen.classList.remove('active');
+            }
+        });
+        
         showMainMenu();
     }
 }
